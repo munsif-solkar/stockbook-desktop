@@ -122,7 +122,7 @@ removes the ledger.
 
 Prerequisites:
 
-- Go 1.24+
+- Go 1.25+
 - Node.js 20+
 - Wails v2 (`go install github.com/wailsapp/wails/v2/cmd/wails@latest`)
 - Linux only: `webkit2gtk-4.1` development files and the usual GTK build
