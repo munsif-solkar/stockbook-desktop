@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Stockbook
+Comment=Local-first inventory, purchases, and sales ledger
+Exec=stockbook
+Icon=stockbook
+Categories=Office;Finance;
+Terminal=false
+StartupWMClass=Stockbook

@@ -1,0 +1,29 @@
+# Build output
+build/bin/
+build/appimage/*.AppImage
+build/appimage/Stockbook.AppDir/usr/bin/stockbook
+build/windows-dist/
+build.zip
+
+# Go
+*.test
+*.out
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/package.json.md5
+
+# Local data and secrets
+data/
+*.db
+*.db-shm
+*.db-wal
+session
+backups/
+
+# Editors and OS files
+.DS_Store
+.idea/
+.vscode/
+*.swp
