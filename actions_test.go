@@ -15,8 +15,13 @@ func newTestApp(t *testing.T) *App {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
-	return &App{db: db, dbPath: path, attempts: map[string]*attemptEntry{}}
+	app := &App{db: db, dbPath: path, attempts: map[string]*attemptEntry{}}
+	t.Cleanup(func() {
+		if app.db != nil {
+			app.db.Close()
+		}
+	})
+	return app
 }
 
 func TestAccountAndLedgerFlow(t *testing.T) {
@@ -150,6 +155,43 @@ func TestAccountAndLedgerFlow(t *testing.T) {
 	badLogin := app.Login(LoginInput{Email: "owner@example.com", Password: "wrong-password"})
 	if badLogin.Error == "" {
 		t.Errorf("wrong password should fail")
+	}
+}
+
+func TestItemsNewestFirst(t *testing.T) {
+	app := newTestApp(t)
+	app.Register(RegisterInput{
+		CompanyName:     "Order Test",
+		Email:           "order@example.com",
+		Password:        "Password123",
+		ConfirmPassword: "Password123",
+	})
+
+	for _, name := range []string{"Alpha", "Zebra"} {
+		result, err := app.CreateItem(ItemInput{
+			Name:              name,
+			Category:          "Test",
+			LowStockThreshold: "2",
+			PurchasePrice:     "10",
+			SellPrice:         "15",
+		})
+		if err != nil || result.Error != "" || result.FieldErrors != nil {
+			t.Fatalf("create %s: %+v %v", name, result, err)
+		}
+	}
+
+	items, err := app.Items(ItemsInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items.Items) != 2 {
+		t.Fatalf("item count = %d, want 2", len(items.Items))
+	}
+	if items.Items[0].Name != "Zebra" {
+		t.Errorf("first item = %q, want newest item Zebra", items.Items[0].Name)
+	}
+	if items.Items[1].Name != "Alpha" {
+		t.Errorf("second item = %q, want Alpha", items.Items[1].Name)
 	}
 }
 

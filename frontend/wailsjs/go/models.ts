@@ -50,6 +50,24 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class BackupResult {
+	    canceled?: boolean;
+	    path?: string;
+	    size?: number;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BackupResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.canceled = source["canceled"];
+	        this.path = source["path"];
+	        this.size = source["size"];
+	        this.error = source["error"];
+	    }
+	}
 	export class CategoryBreakdown {
 	    category: string;
 	    revenue: number;
@@ -683,6 +701,24 @@ export namespace main {
 	        this.confirmPassword = source["confirmPassword"];
 	    }
 	}
+	export class RestoreResult {
+	    canceled?: boolean;
+	    restored?: boolean;
+	    safetyBackup?: string;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RestoreResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.canceled = source["canceled"];
+	        this.restored = source["restored"];
+	        this.safetyBackup = source["safetyBackup"];
+	        this.error = source["error"];
+	    }
+	}
 	export class SaleInput {
 	    productId: string;
 	    quantity: string;
@@ -815,6 +851,53 @@ export namespace main {
 		}
 	}
 	
+	
+	export class UpdateApplyResult {
+	    updated?: boolean;
+	    restarting?: boolean;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new UpdateApplyResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.updated = source["updated"];
+	        this.restarting = source["restarting"];
+	        this.error = source["error"];
+	    }
+	}
+	export class UpdateInfo {
+	    currentVersion: string;
+	    latestVersion?: string;
+	    updateAvailable: boolean;
+	    releaseName?: string;
+	    releaseUrl?: string;
+	    publishedAt?: string;
+	    notes?: string;
+	    assetName?: string;
+	    assetSize?: number;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new UpdateInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.currentVersion = source["currentVersion"];
+	        this.latestVersion = source["latestVersion"];
+	        this.updateAvailable = source["updateAvailable"];
+	        this.releaseName = source["releaseName"];
+	        this.releaseUrl = source["releaseUrl"];
+	        this.publishedAt = source["publishedAt"];
+	        this.notes = source["notes"];
+	        this.assetName = source["assetName"];
+	        this.assetSize = source["assetSize"];
+	        this.error = source["error"];
+	    }
+	}
 
 }
 

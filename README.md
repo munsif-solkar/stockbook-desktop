@@ -43,6 +43,10 @@ current Windows 10 and 11. If SmartScreen warns about an unsigned app, choose
   cashflow split, and safe deletion that returns units to stock.
 - **New sell**: quick-sale dialog with item search, stock limits, editable price,
   and cash/UPI payment modes.
+- **Backup & restore**: save the whole local database to a `.db` file, and
+  restore it with a validated, automatic safety snapshot.
+- **In-app updates**: check GitHub releases, then download and install a newer
+  build that is verified against the release checksum.
 - INR formatting by default, with date-range presets and pagination.
 
 ## Where your data lives
@@ -99,6 +103,40 @@ own local database. Use a backup file to move a ledger between machines.
 
 Only deleting the data directory, wiping the OS user profile, or losing the disk
 removes the ledger.
+
+### Backup & restore
+
+Open **Backup & restore** in the sidebar to save a copy of the whole database.
+The result is an ordinary SQLite `.db` file containing every account, item,
+purchase, and sale. Keep it on another drive or in cloud storage.
+
+Restoring validates the selected file before changing anything:
+
+1. The backup must be a healthy SQLite database with Stockbook's tables.
+2. A safety snapshot of the current data is written to the `backups` folder.
+3. The database is swapped atomically and the app signs out.
+4. Sign in with the account stored in the restored backup.
+
+To undo a restore, close Stockbook, copy the `restore-safety-*.db` snapshot over
+`stockbook.db`, and delete any `stockbook.db-wal` and `stockbook.db-shm` files
+beside it.
+
+### App updates
+
+Click **Check for updates** in the sidebar (or in **Backup & restore**) to
+compare the running version with the latest public GitHub release.
+
+When a newer release exists, **Install update** downloads the build for this
+platform, verifies it against the release's `SHA256SUMS.txt`, replaces the
+executable, and restarts. On Windows the previous executable is renamed to
+`.old` and removed on the next launch. Ledger data is never touched by an app
+update.
+
+Automatic updates require the release to contain the platform asset
+(`Stockbook-x86_64.AppImage` or `stockbook.exe`) and `SHA256SUMS.txt`. If those
+are missing, the app points to the release page for a manual download. The app
+only downloads over HTTPS from the official `munsif-solkar/stockbook-desktop`
+repository and its GitHub asset hosts.
 
 ## Security notes
 
@@ -193,8 +231,12 @@ go vet ./...
 ```
 
 - `actions_test.go` covers registration, login, session files, item creation,
-  purchases, sales, payment splits, stock restoration, deletion rules, and
-  validation in a temporary database.
+  newest-first item ordering, purchases, sales, payment splits, stock
+  restoration, deletion rules, and validation in a temporary database.
+- `backup_test.go` covers full-database backups, restore validation, safety
+  snapshots, signing out after restore, and rejection of invalid files.
+- `version_test.go` covers version comparison, update asset selection, and
+  download URL validation.
 - `db_test.go` covers opening databases at paths with spaces and punctuation and
   verifies startup backups, backup contents, and retention pruning.
 - `parity_test.go` compares the desktop queries against a copy of real data and
@@ -213,6 +255,8 @@ main.go, app.go        Wails entry point and window setup
 actions*.go            Auth and mutation actions exposed to the frontend
 queries.go             Read queries and aggregations
 db.go                  SQLite opening, PRAGMAs, migrations, backups
+backup.go              Database backup, validation, and restore
+updates.go, version.go GitHub release checks and verified self-updates
 auth.go                scrypt password hashing and session handling
 models.go, validation.go, format.go
 frontend/              React + TypeScript + Vite SPA

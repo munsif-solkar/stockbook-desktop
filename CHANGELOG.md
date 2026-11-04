@@ -3,6 +3,27 @@
 All notable changes to Stockbook Desktop are documented here. This project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-11-04
+
+### Added
+
+- Backup & restore page in the sidebar. Backups are complete SQLite `.db`
+  snapshots; restore validates the file, keeps a safety snapshot, swaps the
+  database atomically, and signs out.
+- In-app update checks against the latest GitHub release, with verified
+  downloads, checksum validation, self-replacement, and automatic restart.
+- "Check for updates" shortcut in the sidebar and the app version on the
+  Backup & restore page.
+- Newest-first ordering on the Items page so a newly created item appears at
+  the top, ready for adding stock.
+
+### Reliability
+
+- Interrupted restores recover the previous database on the next launch.
+- Restore safety snapshots are kept separately from rolling startup backups.
+- Windows update replacement removes the previous executable on the next
+  launch.
+
 ## [1.0.0] - 2026-11-03
 
 First desktop release.

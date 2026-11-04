@@ -277,3 +277,36 @@ type MutationResult struct {
 	SaleID      int64               `json:"saleId,omitempty"`
 	PurchaseID  int64               `json:"purchaseId,omitempty"`
 }
+
+type BackupResult struct {
+	Canceled bool   `json:"canceled,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Size     int64  `json:"size,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+type RestoreResult struct {
+	Canceled     bool   `json:"canceled,omitempty"`
+	Restored     bool   `json:"restored,omitempty"`
+	SafetyBackup string `json:"safetyBackup,omitempty"`
+	Error        string `json:"error,omitempty"`
+}
+
+type UpdateInfo struct {
+	CurrentVersion  string `json:"currentVersion"`
+	LatestVersion   string `json:"latestVersion,omitempty"`
+	UpdateAvailable bool   `json:"updateAvailable"`
+	ReleaseName     string `json:"releaseName,omitempty"`
+	ReleaseURL      string `json:"releaseUrl,omitempty"`
+	PublishedAt     string `json:"publishedAt,omitempty"`
+	Notes           string `json:"notes,omitempty"`
+	AssetName       string `json:"assetName,omitempty"`
+	AssetSize       int64  `json:"assetSize,omitempty"`
+	Error           string `json:"error,omitempty"`
+}
+
+type UpdateApplyResult struct {
+	Updated    bool   `json:"updated,omitempty"`
+	Restarting bool   `json:"restarting,omitempty"`
+	Error      string `json:"error,omitempty"`
+}

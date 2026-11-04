@@ -3,6 +3,7 @@ build/bin/
 build/appimage/*.AppImage
 build/appimage/Stockbook.AppDir/usr/bin/stockbook
 build/windows-dist/
+build/release/
 build.zip
 
 # Go

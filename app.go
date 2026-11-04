@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"os"
 	"sync"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -13,6 +14,10 @@ type App struct {
 	db     *sql.DB
 	dbPath string
 	dbErr  error
+
+	// opMu serialises maintenance operations that close or replace the
+	// database (backup, restore, update).
+	opMu sync.Mutex
 
 	mu       sync.Mutex
 	company  *Company
@@ -26,6 +31,16 @@ func NewApp() *App {
 	app.db = db
 	app.dbPath = path
 	app.dbErr = err
+	if err == nil && path != "" {
+		// A leftover copy from an interrupted restore is no longer needed
+		// once the active database opens cleanly.
+		_ = os.Remove(path + ".replacing")
+	}
+	// Windows keeps the previous executable as a .old file because it cannot
+	// be deleted while it is running. Remove it after the next launch.
+	if executable, err := os.Executable(); err == nil {
+		_ = os.Remove(executable + ".old")
+	}
 	return app
 }
 

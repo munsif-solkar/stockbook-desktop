@@ -484,7 +484,7 @@ func (a *App) Items(in ItemsInput) (ItemsResult, error) {
 		        purchase_price, sell_price, low_stock_threshold
 		 FROM products
 		 WHERE %s
-		 ORDER BY name COLLATE NOCASE ASC
+		 ORDER BY created_at DESC, id DESC
 		 LIMIT ? OFFSET ?`, where), append(params, pageSize, (page-1)*pageSize)...)
 	if err != nil {
 		return ItemsResult{}, err

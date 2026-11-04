@@ -215,6 +215,15 @@ func openDatabase() (*sql.DB, string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, "", err
 	}
+
+	// If a restore was interrupted between moving the old database aside and
+	// installing the new one, put the old database back before opening.
+	if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
+		if _, oldErr := os.Stat(path + ".replacing"); oldErr == nil {
+			_ = os.Rename(path+".replacing", path)
+		}
+	}
+
 	importLegacyDatabase(path)
 
 	// Pass the native file name straight to the driver. Building a file: URI

@@ -234,6 +234,40 @@ export type MutationResult = {
 
 export type ProductResult = { product: ProductOption | null };
 
+export type BackupResult = {
+  canceled?: boolean;
+  path?: string;
+  size?: number;
+  error?: string;
+};
+
+export type RestoreResult = {
+  canceled?: boolean;
+  restored?: boolean;
+  safetyBackup?: string;
+  error?: string;
+};
+
+export type UpdateInfo = {
+  currentVersion: string;
+  latestVersion?: string;
+  updateAvailable: boolean;
+  releaseName?: string;
+  releaseUrl?: string;
+  publishedAt?: string;
+  notes?: string;
+  assetName?: string;
+  assetSize?: number;
+  error?: string;
+};
+
+export type UpdateApplyResult = {
+  updated?: boolean;
+  restarting?: boolean;
+  error?: string;
+};
+
+
 type Bridge = Record<string, (...args: unknown[]) => Promise<unknown>>;
 
 function bridge(): Bridge | null {
@@ -298,4 +332,9 @@ export const api = {
   DeleteSale: (id: number) =>
     invoke<MutationResult>("DeleteSale", { id: String(id) }),
   DataLocation: () => invoke<string>("DataLocation"),
+  Version: () => invoke<string>("Version"),
+  BackupDatabase: () => invoke<BackupResult>("BackupDatabase"),
+  RestoreDatabase: () => invoke<RestoreResult>("RestoreDatabase"),
+  CheckForUpdates: () => invoke<UpdateInfo>("CheckForUpdates"),
+  ApplyUpdate: () => invoke<UpdateApplyResult>("ApplyUpdate"),
 };

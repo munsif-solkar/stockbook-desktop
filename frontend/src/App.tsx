@@ -5,6 +5,7 @@ import { SidebarNav } from "./components/SidebarNav";
 import { CURRENCY } from "./format";
 import { RefreshProvider, useRefresh } from "./refresh";
 import { Link, navigate, useRouter } from "./router";
+import { BackupPage } from "./pages/BackupPage";
 import { InventoryPage } from "./pages/InventoryPage";
 import { ItemsPage } from "./pages/ItemsPage";
 import { LoginPage } from "./pages/LoginPage";
@@ -53,9 +54,14 @@ function AppShell({
           <span className="sidebar-email" title={company.email}>
             {company.email}
           </span>
-          <button className="btn btn-ghost btn-sm" type="button" onClick={onLogout}>
-            Sign out
-          </button>
+          <div className="sidebar-footer-actions">
+            <Link className="sidebar-footer-link" to="/backup?updates=1">
+              Check for updates
+            </Link>
+            <button className="btn btn-ghost btn-sm" type="button" onClick={onLogout}>
+              Sign out
+            </button>
+          </div>
         </div>
       </aside>
 
@@ -191,6 +197,9 @@ export function App() {
       break;
     case "/sales":
       page = <SalesPage />;
+      break;
+    case "/backup":
+      page = <BackupPage />;
       break;
     case "/login":
     case "/register":

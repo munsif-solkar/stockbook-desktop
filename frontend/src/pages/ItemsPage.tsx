@@ -83,7 +83,7 @@ export function ItemsPage() {
 
       {saved ? (
         <div className="notice" role="status">
-          <span>Item saved. Add stock from Inventory when it arrives.</span>
+          <span>Item saved. It is at the top of the catalog — add stock from Inventory when it arrives.</span>
           <Link to="/items">Dismiss</Link>
         </div>
       ) : null}
@@ -190,8 +190,8 @@ export function ItemsPage() {
               <div>
                 <h2 className="section-title">Catalog</h2>
                 <p className="section-sub">
-                  Items exist without stock. Use Inventory to add units and record
-                  purchases.
+                  Newest first. Items exist without stock; use Inventory to add
+                  units and record purchases.
                 </p>
               </div>
               <span className="badge">{formatNumber(data.summary.count)} total</span>
