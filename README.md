@@ -5,8 +5,7 @@
 
 A local-first inventory, purchasing, and sales ledger for small retail shops.
 Stockbook Desktop is a native desktop application built with Go and
-[Wails](https://wails.io), using the same SQLite schema as the Stockbook web
-app.
+[Wails](https://wails.io)
 
 Everything runs on the computer it is installed on. There is no server, no
 network API, no account in the cloud, and no telemetry. The database is a plain
@@ -75,7 +74,7 @@ Environment overrides:
 
 On first run, if the target database does not exist, the app looks for a legacy
 `data/stockbook.db` beside the working directory or the executable and copies it
-(with its WAL) into place. The original web-app database is never modified.
+(with its WAL) into place.
 
 ### Backups and durability
 
