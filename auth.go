@@ -82,6 +82,11 @@ func (a *App) removeSessionFile() {
 // revoked session simply lands on the sign-in screen; a backend that is down
 // does not lock the app behind a fatal error.
 func (a *App) restoreSession() {
+	if a.currentMode() == modeLocal {
+		a.restoreLocalSession()
+		return
+	}
+
 	state, ok := a.loadSessionFile()
 	if !ok {
 		return

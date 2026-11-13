@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -13,76 +12,71 @@ import (
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-const maxBackupSize = 64 << 20
+const maxExportSize = 64 << 20
 
-// BackupDatabase asks for a destination and writes a JSON snapshot of the
-// signed-in workspace from Supabase. The file contains every item, purchase,
-// and sale for that workspace.
-func (a *App) BackupDatabase() (BackupResult, error) {
+// ExportData asks for a destination and writes a JSON copy of the signed-in
+// workspace. The file contains only inventory data: items, purchases, and
+// sales. It never contains account details, email addresses, or passwords.
+func (a *App) ExportData() (ExportResult, error) {
 	if _, err := a.requireCompany(); err != nil {
-		return BackupResult{}, err
+		return ExportResult{}, err
 	}
 	if a.ctx == nil {
-		return BackupResult{Error: "The app window is not ready yet. Try again in a moment."}, nil
+		return ExportResult{Error: "The app window is not ready yet. Try again in a moment."}, nil
 	}
 
 	a.opMu.Lock()
 	defer a.opMu.Unlock()
 
 	path, err := wailsruntime.SaveFileDialog(a.ctx, wailsruntime.SaveDialogOptions{
-		Title:                "Save Stockbook backup",
-		DefaultFilename:      "stockbook-backup-" + time.Now().Format("2006-01-02-150405") + ".json",
+		Title:                "Export Stockbook data",
+		DefaultFilename:      "stockbook-data-" + time.Now().Format("2006-01-02-150405") + ".json",
 		CanCreateDirectories: true,
 		Filters: []wailsruntime.FileFilter{
-			{DisplayName: "Stockbook backup (*.json)", Pattern: "*.json"},
+			{DisplayName: "Stockbook data (*.json)", Pattern: "*.json"},
 		},
 	})
 	if err != nil {
-		return BackupResult{}, err
+		return ExportResult{}, err
 	}
 	if strings.TrimSpace(path) == "" {
-		return BackupResult{Canceled: true}, nil
+		return ExportResult{Canceled: true}, nil
 	}
 	if !strings.HasSuffix(strings.ToLower(path), ".json") {
 		path += ".json"
 	}
 
-	size, err := a.backupToFile(path)
+	size, err := a.exportToFile(path)
 	if err != nil {
-		return BackupResult{Error: friendlyBackupError(err)}, nil
+		return ExportResult{Error: friendlyExportError(err)}, nil
 	}
-	return BackupResult{Path: path, Size: size}, nil
+	return ExportResult{Path: path, Size: size}, nil
 }
 
-func friendlyBackupError(err error) string {
+func friendlyExportError(err error) string {
 	if errors.Is(err, os.ErrPermission) {
 		return "Stockbook could not write to that folder. Choose another location."
 	}
-	return "Could not create the backup: " + err.Error()
+	return "Could not export your data: " + err.Error()
 }
 
-// backupToFile exports the workspace and writes it atomically to target.
-func (a *App) backupToFile(target string) (int64, error) {
-	var raw json.RawMessage
-	if err := a.api.rpc(a.context(), "stockbook_export", map[string]any{}, &raw); err != nil {
+// exportToFile exports the workspace and writes it atomically to target.
+func (a *App) exportToFile(target string) (int64, error) {
+	clean, err := a.exportData()
+	if err != nil {
 		return 0, err
 	}
-	if len(raw) == 0 {
-		return 0, errors.New("the backend returned an empty backup")
-	}
-
-	var pretty bytes.Buffer
-	if err := json.Indent(&pretty, raw, "", "  "); err != nil {
+	data, err := buildDataFile(clean)
+	if err != nil {
 		return 0, err
 	}
-	pretty.WriteByte('\n')
 
 	dir := filepath.Dir(target)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return 0, err
 	}
 
-	temp, err := os.CreateTemp(dir, ".stockbook-backup-*.json")
+	temp, err := os.CreateTemp(dir, ".stockbook-export-*.json")
 	if err != nil {
 		return 0, err
 	}
@@ -93,7 +87,7 @@ func (a *App) backupToFile(target string) (int64, error) {
 		temp.Close()
 		return 0, err
 	}
-	if _, err := temp.Write(pretty.Bytes()); err != nil {
+	if _, err := temp.Write(data); err != nil {
 		temp.Close()
 		return 0, err
 	}
@@ -122,73 +116,78 @@ func replaceFile(source, target string) error {
 	return os.Rename(source, target)
 }
 
-type backupEnvelope struct {
-	Format    string          `json:"format"`
-	Version   int             `json:"version"`
-	Products  json.RawMessage `json:"products"`
-	Purchases json.RawMessage `json:"purchases"`
-	Sales     json.RawMessage `json:"sales"`
+// exportData reads the active backend into the shared inventory shape.
+func (a *App) exportData() (*cleanData, error) {
+	if a.currentMode() == modeLocal {
+		return a.exportLocalData()
+	}
+
+	var raw json.RawMessage
+	if err := a.api.rpc(a.context(), "stockbook_export", map[string]any{}, &raw); err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return nil, errors.New("the backend returned an empty export")
+	}
+	// Validate and re-serialise so even an older backend response cannot leak
+	// account fields or malformed values into the file.
+	return parseDataFile(raw)
 }
 
-func isJSONArray(raw json.RawMessage) bool {
-	trimmed := bytes.TrimSpace(raw)
-	return len(trimmed) > 1 && trimmed[0] == '['
-}
-
-// RestoreDatabase asks for a Stockbook backup and replaces the signed-in
-// workspace in Supabase with it. The current workspace is snapshotted first,
-// so a bad restore never destroys the only copy.
-func (a *App) RestoreDatabase() (RestoreResult, error) {
+// ImportData asks for a Stockbook JSON export and replaces the signed-in
+// workspace with it. The current workspace is snapshotted first, so a bad
+// import never destroys the only copy. The account and session stay intact.
+func (a *App) ImportData() (ImportResult, error) {
 	if _, err := a.requireCompany(); err != nil {
-		return RestoreResult{}, err
+		return ImportResult{}, err
 	}
 	if a.ctx == nil {
-		return RestoreResult{Error: "The app window is not ready yet. Try again in a moment."}, nil
+		return ImportResult{Error: "The app window is not ready yet. Try again in a moment."}, nil
 	}
 
 	a.opMu.Lock()
 	defer a.opMu.Unlock()
 
 	path, err := wailsruntime.OpenFileDialog(a.ctx, wailsruntime.OpenDialogOptions{
-		Title: "Choose a Stockbook backup",
+		Title: "Choose a Stockbook data file",
 		Filters: []wailsruntime.FileFilter{
-			{DisplayName: "Stockbook backup (*.json)", Pattern: "*.json"},
+			{DisplayName: "Stockbook data (*.json)", Pattern: "*.json"},
 		},
 	})
 	if err != nil {
-		return RestoreResult{}, err
+		return ImportResult{}, err
 	}
 	if strings.TrimSpace(path) == "" {
-		return RestoreResult{Canceled: true}, nil
+		return ImportResult{Canceled: true}, nil
 	}
 
-	safety, err := a.restoreFromFile(path)
+	safety, err := a.importFromFile(path)
 	if err != nil {
-		return RestoreResult{Error: friendlyRestoreError(err)}, nil
+		return ImportResult{Error: friendlyImportError(err)}, nil
 	}
-	return RestoreResult{Restored: true, SafetyBackup: safety}, nil
+	return ImportResult{Imported: true, SafetyBackup: safety}, nil
 }
 
-func friendlyRestoreError(err error) string {
+func friendlyImportError(err error) string {
 	switch {
 	case errors.Is(err, os.ErrPermission):
 		return "Stockbook could not read that file. Choose another location."
-	case strings.Contains(err.Error(), "not a Stockbook backup"):
+	case strings.Contains(err.Error(), "not a Stockbook data file"):
 		return err.Error()
 	default:
-		return "Could not restore the backup: " + err.Error()
+		return "Could not import the data: " + err.Error()
 	}
 }
 
-// restoreFromFile validates source, snapshots the current workspace, imports
-// the backup, and signs out. It returns the safety snapshot path.
-func (a *App) restoreFromFile(source string) (string, error) {
+// importFromFile validates source, snapshots the current workspace, and
+// imports the file. It returns the safety snapshot path.
+func (a *App) importFromFile(source string) (string, error) {
 	info, err := os.Stat(source)
 	if err != nil {
 		return "", err
 	}
-	if info.Size() > maxBackupSize {
-		return "", errors.New("not a Stockbook backup: the file is too large")
+	if info.Size() > maxExportSize {
+		return "", invalidData("the file is too large")
 	}
 
 	data, err := os.ReadFile(source)
@@ -196,15 +195,9 @@ func (a *App) restoreFromFile(source string) (string, error) {
 		return "", err
 	}
 
-	var envelope backupEnvelope
-	if err := json.Unmarshal(data, &envelope); err != nil {
-		return "", errors.New("not a Stockbook backup: the file is not valid JSON")
-	}
-	if envelope.Format != "stockbook-backup" ||
-		!isJSONArray(envelope.Products) ||
-		!isJSONArray(envelope.Purchases) ||
-		!isJSONArray(envelope.Sales) {
-		return "", errors.New("not a Stockbook backup: expected products, purchases, and sales lists")
+	clean, err := parseDataFile(data)
+	if err != nil {
+		return "", err
 	}
 
 	safety, err := a.writeSafetySnapshot()
@@ -212,33 +205,46 @@ func (a *App) restoreFromFile(source string) (string, error) {
 		return "", err
 	}
 
+	if err := a.importData(clean); err != nil {
+		return "", err
+	}
+	return safety, nil
+}
+
+// importData replaces the active backend's inventory with validated records.
+func (a *App) importData(clean *cleanData) error {
+	if a.currentMode() == modeLocal {
+		return a.importLocalData(clean)
+	}
+
+	payload, err := buildDataFile(clean)
+	if err != nil {
+		return err
+	}
 	var outcome rpcOutcome
 	if err := a.api.rpc(a.context(), "stockbook_import",
-		map[string]any{"p_data": json.RawMessage(data)}, &outcome); err != nil {
-		return "", err
+		map[string]any{"p_data": json.RawMessage(payload)}, &outcome); err != nil {
+		return err
 	}
 	if !outcome.OK {
 		message := outcome.Error
 		if message == "" {
-			message = "the backup could not be imported"
+			message = "the data could not be imported"
 		}
-		return "", errors.New(message)
+		return errors.New(message)
 	}
-
-	// Restoring replaces the signed-in workspace, so force a fresh sign-in.
-	a.destroySession()
-	return safety, nil
+	return nil
 }
 
-// writeSafetySnapshot keeps a pre-restore copy outside the normal backup
-// location so a mistaken restore can always be undone.
+// writeSafetySnapshot keeps a pre-import copy outside the normal export
+// location so a mistaken import can always be undone.
 func (a *App) writeSafetySnapshot() (string, error) {
 	dir := filepath.Join(a.dataDir, "backups")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
-	target := filepath.Join(dir, "restore-safety-"+time.Now().Format("20060102-150405.000")+".json")
-	if _, err := a.backupToFile(target); err != nil {
+	target := filepath.Join(dir, "import-safety-"+time.Now().Format("20060102-150405.000")+".json")
+	if _, err := a.exportToFile(target); err != nil {
 		return "", err
 	}
 	return target, nil

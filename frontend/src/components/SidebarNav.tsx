@@ -58,8 +58,8 @@ const items = [
     ),
   },
   {
-    href: "/backup",
-    label: "Backup & restore",
+    href: "/data",
+    label: "Export/import data",
     icon: (
       <>
         <ellipse cx="12" cy="5" rx="8" ry="3" />

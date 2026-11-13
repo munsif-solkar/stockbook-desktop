@@ -180,7 +180,7 @@ func (a *App) product(productID int64) (*ProductOption, error) {
 	return product, nil
 }
 
-func (a *App) Overview(in RangePageInput) (OverviewResult, error) {
+func (a *App) cloudOverview(in RangePageInput) (OverviewResult, error) {
 	if _, err := a.requireCompany(); err != nil {
 		return OverviewResult{}, err
 	}
@@ -217,7 +217,7 @@ func (a *App) Overview(in RangePageInput) (OverviewResult, error) {
 	return result, nil
 }
 
-func (a *App) Items(in ItemsInput) (ItemsResult, error) {
+func (a *App) cloudItems(in ItemsInput) (ItemsResult, error) {
 	if _, err := a.requireCompany(); err != nil {
 		return ItemsResult{}, err
 	}
@@ -251,7 +251,7 @@ func (a *App) Items(in ItemsInput) (ItemsResult, error) {
 	return result, nil
 }
 
-func (a *App) Inventory(in InventoryInput) (InventoryResult, error) {
+func (a *App) cloudInventory(in InventoryInput) (InventoryResult, error) {
 	if _, err := a.requireCompany(); err != nil {
 		return InventoryResult{}, err
 	}
@@ -286,7 +286,7 @@ func (a *App) Inventory(in InventoryInput) (InventoryResult, error) {
 	return result, nil
 }
 
-func (a *App) Purchases(in RangePageInput) (PurchasesResult, error) {
+func (a *App) cloudPurchases(in RangePageInput) (PurchasesResult, error) {
 	if _, err := a.requireCompany(); err != nil {
 		return PurchasesResult{}, err
 	}
@@ -310,7 +310,7 @@ func (a *App) Purchases(in RangePageInput) (PurchasesResult, error) {
 	return result, nil
 }
 
-func (a *App) Sales(in RangePageInput) (SalesResult, error) {
+func (a *App) cloudSales(in RangePageInput) (SalesResult, error) {
 	if _, err := a.requireCompany(); err != nil {
 		return SalesResult{}, err
 	}

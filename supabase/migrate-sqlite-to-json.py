@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
-"""Convert a Stockbook 1.x SQLite database into a Stockbook JSON backup.
+"""Convert a Stockbook 1.x SQLite database into a Stockbook JSON data file.
 
-Stockbook 2.0 stores data in Supabase. This script reads the old local
-`stockbook.db` and writes the JSON format that the new app's
-"Backup & restore" page can import. It does not modify the database.
+Stockbook 2.x can use Supabase or a local SQLite ledger. Stockbook 2.1 opens an
+old local database directly in local mode; this script is optional. It is useful
+for extracting a JSON copy when the desktop app cannot open the database, or when
+you want to move a workspace to Stockbook Cloud from a machine without the app.
+It reads the old `stockbook.db` and writes the JSON format that the app's
+"Export/import data" page can import. It does not modify the database.
+
+The output contains inventory data only: items, purchases, and sales. Account
+emails and passwords are never written to the JSON file.
 
 Usage:
-    python3 scripts/migrate-sqlite-to-json.py --list
-    python3 scripts/migrate-sqlite-to-json.py --out ~/stockbook-backup.json
-    python3 scripts/migrate-sqlite-to-json.py \
+    python3 supabase/migrate-sqlite-to-json.py --list
+    python3 supabase/migrate-sqlite-to-json.py --out ~/stockbook-backup.json
+    python3 supabase/migrate-sqlite-to-json.py \
         --db "/path/to/stockbook.db" --company 1 --out backup.json
 
 Only the Python standard library is required.
@@ -150,7 +156,6 @@ def build_backup(
         "exportedAt": datetime.datetime.now(datetime.timezone.utc)
         .isoformat()
         .replace("+00:00", "Z"),
-        "company": {"name": company["name"], "email": company["email"]},
         "products": products,
         "purchases": purchases,
         "sales": sales,
@@ -227,19 +232,19 @@ def main() -> int:
 
     print(f"Wrote {out}")
     print(
-        "  company:   {name} <{email}>\n"
+        "  company:   {name}\n"
         "  products:  {products}\n"
         "  purchases: {purchases}\n"
         "  sales:     {sales}".format(
+            name=selected["name"],
             products=len(backup["products"]),
             purchases=len(backup["purchases"]),
             sales=len(backup["sales"]),
-            **backup["company"],
         )
     )
     print(
-        "\nNext: open Stockbook 2.0, sign in, then Backup & restore -> Restore "
-        "and choose this file."
+        "\nNext: open Stockbook 2.x, sign in, then Export/import data -> Import "
+        "from JSON file and choose this file."
     )
     return 0
 

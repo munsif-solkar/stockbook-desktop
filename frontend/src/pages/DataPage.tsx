@@ -1,8 +1,15 @@
 import { useEffect, useState } from "react";
-import { api, type BackupResult, type RestoreResult, type UpdateInfo } from "../api";
-import { navigate, useRouter } from "../router";
+import {
+  api,
+  type BackendInfo,
+  type ExportResult,
+  type ImportResult,
+  type UpdateInfo,
+} from "../api";
+import { useRefresh } from "../refresh";
+import { useRouter } from "../router";
 
-type Busy = "" | "backup" | "restore" | "check" | "update";
+type Busy = "" | "export" | "import" | "check" | "update";
 
 function formatBytes(bytes: number | undefined) {
   if (!bytes || bytes < 0) return "";
@@ -11,17 +18,19 @@ function formatBytes(bytes: number | undefined) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function BackupPage() {
+export function DataPage() {
   const { location } = useRouter();
+  const { refresh } = useRefresh();
   const autoCheck = location.query.get("updates") === "1";
 
   const [busy, setBusy] = useState<Busy>("");
   const [version, setVersion] = useState("");
   const [dataPath, setDataPath] = useState("");
-  const [backup, setBackup] = useState<BackupResult | null>(null);
-  const [backupError, setBackupError] = useState("");
-  const [restore, setRestore] = useState<RestoreResult | null>(null);
-  const [restoreError, setRestoreError] = useState("");
+  const [backend, setBackend] = useState<BackendInfo | null>(null);
+  const [exportResult, setExportResult] = useState<ExportResult | null>(null);
+  const [exportError, setExportError] = useState("");
+  const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const [importError, setImportError] = useState("");
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [updateError, setUpdateError] = useState("");
   const [restarting, setRestarting] = useState(false);
@@ -29,6 +38,7 @@ export function BackupPage() {
   useEffect(() => {
     api.Version().then(setVersion).catch(() => setVersion(""));
     api.DataLocation().then(setDataPath).catch(() => setDataPath(""));
+    api.BackendInfo().then(setBackend).catch(() => setBackend(null));
   }, []);
 
   useEffect(() => {
@@ -55,55 +65,54 @@ export function BackupPage() {
     // including when the user is already on this page.
   }, [autoCheck]);
 
-  async function handleBackup() {
-    setBackup(null);
-    setBackupError("");
-    setBusy("backup");
+  async function handleExport() {
+    setExportResult(null);
+    setExportError("");
+    setBusy("export");
     try {
-      const result = await api.BackupDatabase();
+      const result = await api.ExportData();
       if (!result.canceled) {
-        if (result.error) setBackupError(result.error);
-        else setBackup(result);
+        if (result.error) setExportError(result.error);
+        else setExportResult(result);
       }
     } catch (error) {
-      setBackupError(error instanceof Error ? error.message : String(error));
+      setExportError(error instanceof Error ? error.message : String(error));
     } finally {
       setBusy("");
     }
   }
 
-  async function handleRestore() {
+  async function handleImportFile() {
     const confirmed = window.confirm(
-      "Restore a Stockbook backup?\n\n" +
-        "This replaces every item, purchase, and sale in your Supabase " +
-        "workspace with the contents of the backup file. A safety snapshot of " +
-        "the current data is kept and you will need to sign in again.",
+      "Import a Stockbook data file?\n\n" +
+        "This replaces every item, purchase, and sale in your workspace with " +
+        "the contents of that file. Your account stays signed in, and a safety " +
+        "copy of your current data is saved first.",
     );
     if (!confirmed) return;
 
-    setRestore(null);
-    setRestoreError("");
-    setBusy("restore");
+    setImportResult(null);
+    setImportError("");
+    setBusy("import");
     try {
-      const result = await api.RestoreDatabase();
+      const result = await api.ImportData();
       if (result.canceled) return;
       if (result.error) {
-        setRestoreError(result.error);
+        setImportError(result.error);
         return;
       }
-      if (result.restored) {
-        setRestore(result);
+      if (result.imported) {
+        setImportResult(result);
+        refresh();
         window.alert(
-          "Restore complete. Sign in again to open your restored workspace." +
+          "Import complete." +
             (result.safetyBackup
               ? `\n\nA copy of your previous data was saved at:\n${result.safetyBackup}`
               : ""),
         );
-        window.dispatchEvent(new Event("stockbook:unauthorized"));
-        navigate("/login", true);
       }
     } catch (error) {
-      setRestoreError(error instanceof Error ? error.message : String(error));
+      setImportError(error instanceof Error ? error.message : String(error));
     } finally {
       setBusy("");
     }
@@ -154,42 +163,46 @@ export function BackupPage() {
     <>
       <div className="page-head">
         <div>
-          <h1 className="page-title">Backup &amp; restore</h1>
+          <h1 className="page-title">Export/import data</h1>
           <p className="page-sub">
-            Keep a safe copy of your ledger, or move it to another computer.
+            Move your inventory to another computer or keep a safe copy.
           </p>
         </div>
+        <span className="badge">
+          {backend ? (backend.isLocal ? "Local workspace" : "Stockbook Cloud") : "Workspace"}
+        </span>
       </div>
 
       <div className="backup-grid">
         <section className="panel backup-card">
           <div className="section-head">
             <div>
-              <h2 className="section-title">Backup</h2>
-              <p className="section-sub">Download a copy of the whole workspace.</p>
+              <h2 className="section-title">Export data</h2>
+              <p className="section-sub">Save a JSON copy of this workspace.</p>
             </div>
           </div>
           <div className="panel-body">
             <p className="backup-copy">
-              The backup is a JSON file containing every item, purchase, and sale
-              in this workspace. Keep it on another drive or in cloud storage.
+              The file contains your items, purchases, and sales — never your
+              account details or password. It can be imported into a local
+              workspace or a Stockbook Cloud account.
             </p>
             <div className="backup-path">
-              <span>Supabase backend</span>
+              <span>Stockbook data folder</span>
               <code title={dataPath}>{dataPath || "Loading…"}</code>
             </div>
 
-            {backup ? (
+            {exportResult ? (
               <div className="notice backup-result" role="status">
                 <span>
-                  Backup saved ({formatBytes(backup.size)}).
-                  <span className="backup-result-path">{backup.path}</span>
+                  Data exported ({formatBytes(exportResult.size)}).
+                  <span className="backup-result-path">{exportResult.path}</span>
                 </span>
               </div>
             ) : null}
-            {backupError ? (
+            {exportError ? (
               <div className="form-error" role="alert">
-                {backupError}
+                {exportError}
               </div>
             ) : null}
 
@@ -197,10 +210,10 @@ export function BackupPage() {
               <button
                 className="btn btn-primary"
                 type="button"
-                onClick={handleBackup}
+                onClick={handleExport}
                 disabled={busy !== ""}
               >
-                {busy === "backup" ? "Creating backup…" : "Backup now"}
+                {busy === "export" ? "Exporting…" : "Export to JSON…"}
               </button>
             </div>
           </div>
@@ -209,33 +222,33 @@ export function BackupPage() {
         <section className="panel backup-card">
           <div className="section-head">
             <div>
-              <h2 className="section-title">Restore</h2>
-              <p className="section-sub">Replace this workspace from a backup.</p>
+              <h2 className="section-title">Import data</h2>
+              <p className="section-sub">Load a JSON file into this workspace.</p>
             </div>
           </div>
           <div className="panel-body">
             <p className="backup-copy">
-              Choose a backup created by Stockbook. The file is checked before
-              anything changes, and a safety snapshot of the current workspace is
-              kept in the <code>backups</code> folder in your Stockbook data
-              directory.
+              Choose a Stockbook JSON file. Every item, purchase, and sale is
+              validated before anything changes, and a safety copy of the
+              current workspace is kept in the <code>backups</code> folder in
+              your Stockbook data directory.
             </p>
             <div className="backup-warning">
-              Restoring replaces the current items, purchases, and sales, then
-              signs you out. Your Supabase account is unchanged.
+              Importing replaces the current items, purchases, and sales. Your
+              account and sign-in stay exactly as they are.
             </div>
 
-            {restore?.safetyBackup ? (
+            {importResult?.safetyBackup ? (
               <div className="notice backup-result" role="status">
                 <span>
-                  Restored. Safety snapshot:
-                  <span className="backup-result-path">{restore.safetyBackup}</span>
+                  Imported. Safety copy:
+                  <span className="backup-result-path">{importResult.safetyBackup}</span>
                 </span>
               </div>
             ) : null}
-            {restoreError ? (
+            {importError ? (
               <div className="form-error" role="alert">
-                {restoreError}
+                {importError}
               </div>
             ) : null}
 
@@ -243,10 +256,10 @@ export function BackupPage() {
               <button
                 className="btn btn-secondary"
                 type="button"
-                onClick={handleRestore}
+                onClick={handleImportFile}
                 disabled={busy !== ""}
               >
-                {busy === "restore" ? "Restoring…" : "Restore from file…"}
+                {busy === "import" ? "Importing…" : "Import from JSON file…"}
               </button>
             </div>
           </div>

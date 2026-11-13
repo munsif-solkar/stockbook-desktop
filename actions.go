@@ -23,7 +23,7 @@ func mutationOutcome(outcome rpcOutcome, success string) MutationResult {
 	}
 }
 
-func (a *App) CreateItem(in ItemInput) (MutationResult, error) {
+func (a *App) cloudCreateItem(in ItemInput) (MutationResult, error) {
 	if _, err := a.requireCompany(); err != nil {
 		return MutationResult{}, err
 	}
@@ -47,7 +47,7 @@ func (a *App) CreateItem(in ItemInput) (MutationResult, error) {
 	return mutationOutcome(outcome, ""), nil
 }
 
-func (a *App) UpdateItem(in ItemInput) (MutationResult, error) {
+func (a *App) cloudUpdateItem(in ItemInput) (MutationResult, error) {
 	if _, err := a.requireCompany(); err != nil {
 		return MutationResult{}, err
 	}
@@ -72,7 +72,7 @@ func (a *App) UpdateItem(in ItemInput) (MutationResult, error) {
 	return mutationOutcome(outcome, ""), nil
 }
 
-func (a *App) Product(in IDInput) (ProductResult, error) {
+func (a *App) cloudProduct(in IDInput) (ProductResult, error) {
 	if _, err := a.requireCompany(); err != nil {
 		return ProductResult{}, err
 	}
@@ -87,21 +87,21 @@ func (a *App) Product(in IDInput) (ProductResult, error) {
 	return ProductResult{Product: product}, nil
 }
 
-func (a *App) ProductOptions() ([]ProductOption, error) {
+func (a *App) cloudProductOptions() ([]ProductOption, error) {
 	if _, err := a.requireCompany(); err != nil {
 		return nil, err
 	}
 	return a.productOptions()
 }
 
-func (a *App) Categories() ([]string, error) {
+func (a *App) cloudCategories() ([]string, error) {
 	if _, err := a.requireCompany(); err != nil {
 		return nil, err
 	}
 	return a.categories()
 }
 
-func (a *App) CreatePurchase(in PurchaseInput) (MutationResult, error) {
+func (a *App) cloudCreatePurchase(in PurchaseInput) (MutationResult, error) {
 	if _, err := a.requireCompany(); err != nil {
 		return MutationResult{}, err
 	}
@@ -137,7 +137,7 @@ func (a *App) CreatePurchase(in PurchaseInput) (MutationResult, error) {
 	return mutationOutcome(outcome, success), nil
 }
 
-func (a *App) DeletePurchase(in IDInput) (MutationResult, error) {
+func (a *App) cloudDeletePurchase(in IDInput) (MutationResult, error) {
 	if _, err := a.requireCompany(); err != nil {
 		return MutationResult{}, err
 	}
@@ -159,7 +159,7 @@ func (a *App) DeletePurchase(in IDInput) (MutationResult, error) {
 	return mutationOutcome(outcome, success), nil
 }
 
-func (a *App) CreateSale(in SaleInput) (MutationResult, error) {
+func (a *App) cloudCreateSale(in SaleInput) (MutationResult, error) {
 	if _, err := a.requireCompany(); err != nil {
 		return MutationResult{}, err
 	}
@@ -182,7 +182,7 @@ func (a *App) CreateSale(in SaleInput) (MutationResult, error) {
 	return mutationOutcome(outcome, "Sale recorded. Stock updated."), nil
 }
 
-func (a *App) DeleteSale(in IDInput) (MutationResult, error) {
+func (a *App) cloudDeleteSale(in IDInput) (MutationResult, error) {
 	if _, err := a.requireCompany(); err != nil {
 		return MutationResult{}, err
 	}

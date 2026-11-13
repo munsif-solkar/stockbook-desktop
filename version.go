@@ -10,7 +10,7 @@ import (
 // GitHub release. Override it at build time with:
 //
 //	go build -ldflags "-X main.appVersion=1.2.3"
-var appVersion = "2.0.0"
+var appVersion = "2.1.0"
 
 const releasesRepository = "munsif-solkar/stockbook-desktop"
 const releasesAPI = "https://api.github.com/repos/" + releasesRepository + "/releases/latest"

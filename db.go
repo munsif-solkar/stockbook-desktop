@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,35 +18,42 @@ import (
 )
 
 const (
-	defaultSupabaseURL     = "http://127.0.0.1:54321"
-	defaultSupabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
-	apiTimeout             = 25 * time.Second
-	maxResponseBody        = 32 << 20
-	configFileName         = "config.json"
+	apiTimeout      = 25 * time.Second
+	maxResponseBody = 32 << 20
 )
 
-// backendConfig is an optional config.json in the Stockbook data directory.
-// It lets a packaged desktop build point at a hosted Supabase project without
-// environment variables. The anon key is public by design; never put the
-// service-role key here.
+// backendConfig is compiled into the app from config.json at the repository
+// root. End users never create or edit a config file; people building from
+// source can point the build at their own Supabase project by editing that
+// file before building. Only the public anon/publishable key belongs here.
 type backendConfig struct {
 	SupabaseURL     string `json:"supabaseUrl"`
 	SupabaseAnonKey string `json:"supabaseAnonKey"`
 }
 
-func readBackendConfig(dir string) backendConfig {
-	if dir == "" {
-		return backendConfig{}
-	}
-	data, err := os.ReadFile(filepath.Join(dir, configFileName))
-	if err != nil {
-		return backendConfig{}
-	}
+//go:embed config.json
+var embeddedConfig []byte
+
+func cloudBackendConfig() (backendConfig, error) {
 	var config backendConfig
-	if err := json.Unmarshal(data, &config); err != nil {
-		return backendConfig{}
+	if err := json.Unmarshal(embeddedConfig, &config); err != nil {
+		return config, fmt.Errorf("config.json is not valid JSON: %w", err)
 	}
-	return config
+	config.SupabaseURL = strings.TrimSpace(config.SupabaseURL)
+	config.SupabaseAnonKey = strings.TrimSpace(config.SupabaseAnonKey)
+	if config.SupabaseURL == "" || config.SupabaseAnonKey == "" {
+		return config, errors.New("config.json must define supabaseUrl and supabaseAnonKey")
+	}
+
+	// Environment overrides keep test runs and development builds away from
+	// the production Stockbook Cloud project.
+	if value := strings.TrimSpace(os.Getenv("STOCKBOOK_SUPABASE_URL")); value != "" {
+		config.SupabaseURL = value
+	}
+	if value := strings.TrimSpace(os.Getenv("STOCKBOOK_SUPABASE_ANON_KEY")); value != "" {
+		config.SupabaseAnonKey = value
+	}
+	return config, nil
 }
 
 var (
@@ -137,29 +145,15 @@ type supabaseAPI struct {
 }
 
 func newSupabaseAPI(config backendConfig) (*supabaseAPI, error) {
-	baseURL := strings.TrimSpace(os.Getenv("STOCKBOOK_SUPABASE_URL"))
-	if baseURL == "" {
-		baseURL = strings.TrimSpace(config.SupabaseURL)
-	}
-	if baseURL == "" {
-		baseURL = defaultSupabaseURL
-	}
-	baseURL = strings.TrimRight(baseURL, "/")
-
-	anonKey := strings.TrimSpace(os.Getenv("STOCKBOOK_SUPABASE_ANON_KEY"))
-	if anonKey == "" {
-		anonKey = strings.TrimSpace(config.SupabaseAnonKey)
-	}
-	if anonKey == "" {
-		anonKey = defaultSupabaseAnonKey
-	}
+	baseURL := strings.TrimRight(strings.TrimSpace(config.SupabaseURL), "/")
+	anonKey := strings.TrimSpace(config.SupabaseAnonKey)
 
 	parsed, err := url.Parse(baseURL)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		return nil, fmt.Errorf("STOCKBOOK_SUPABASE_URL is not a valid http(s) URL")
+		return nil, fmt.Errorf("the Stockbook backend URL is not valid")
 	}
 	if anonKey == "" {
-		return nil, fmt.Errorf("STOCKBOOK_SUPABASE_ANON_KEY is empty")
+		return nil, fmt.Errorf("the Stockbook backend key is empty")
 	}
 
 	return &supabaseAPI{
@@ -179,11 +173,16 @@ func (s *supabaseAPI) request(ctx context.Context, method, path string, body any
 		reader = bytes.NewReader(encoded)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, s.baseURL+path, reader)
+	s.mu.Lock()
+	baseURL := s.baseURL
+	anonKey := s.anonKey
+	s.mu.Unlock()
+
+	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, reader)
 	if err != nil {
 		return 0, nil, err
 	}
-	req.Header.Set("apikey", s.anonKey)
+	req.Header.Set("apikey", anonKey)
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")

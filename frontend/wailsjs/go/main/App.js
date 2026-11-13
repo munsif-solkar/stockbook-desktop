@@ -6,8 +6,8 @@ export function ApplyUpdate() {
   return window['go']['main']['App']['ApplyUpdate']();
 }
 
-export function BackupDatabase() {
-  return window['go']['main']['App']['BackupDatabase']();
+export function BackendInfo() {
+  return window['go']['main']['App']['BackendInfo']();
 }
 
 export function Categories() {
@@ -40,6 +40,14 @@ export function DeletePurchase(arg1) {
 
 export function DeleteSale(arg1) {
   return window['go']['main']['App']['DeleteSale'](arg1);
+}
+
+export function ExportData() {
+  return window['go']['main']['App']['ExportData']();
+}
+
+export function ImportData() {
+  return window['go']['main']['App']['ImportData']();
 }
 
 export function Inventory(arg1) {
@@ -78,16 +86,16 @@ export function Register(arg1) {
   return window['go']['main']['App']['Register'](arg1);
 }
 
-export function RestoreDatabase() {
-  return window['go']['main']['App']['RestoreDatabase']();
-}
-
 export function Sales(arg1) {
   return window['go']['main']['App']['Sales'](arg1);
 }
 
 export function Session() {
   return window['go']['main']['App']['Session']();
+}
+
+export function SetBackend(arg1) {
+  return window['go']['main']['App']['SetBackend'](arg1);
 }
 
 export function UpdateItem(arg1) {

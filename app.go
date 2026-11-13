@@ -4,23 +4,29 @@ import (
 	"context"
 	"os"
 	"sync"
-
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 type App struct {
 	ctx     context.Context
-	api     *supabaseAPI
 	dataDir string
-	initErr error
+
+	// backendMu guards the active backend and its initialization error. The
+	// cloud client and the local SQLite store are both kept open once created
+	// so switching between backends does not wait for files or connections.
+	backendMu sync.RWMutex
+	mode      backendMode
+	api       *supabaseAPI
+	local     *localStore
+	initErr   error
 
 	// opMu serialises maintenance operations that may replace a whole
-	// workspace (backup, restore, update).
+	// workspace (export, import, update).
 	opMu sync.Mutex
 
-	mu       sync.Mutex
-	company  *Company
-	attempts map[string]*attemptEntry
+	mu         sync.Mutex
+	company    *Company
+	localToken string
+	attempts   map[string]*attemptEntry
 }
 
 func NewApp() *App {
@@ -28,18 +34,38 @@ func NewApp() *App {
 
 	dir, err := dataDirectory()
 	if err != nil {
-		app.initErr = err
+		app.setInitErr(err)
 		return app
 	}
 	app.dataDir = dir
 
-	api, err := newSupabaseAPI(readBackendConfig(dir))
-	if err != nil {
-		app.initErr = err
-		return app
+	mode, modeErr := loadBackendMode(dir)
+	app.mode = mode
+
+	cloudConfig, configErr := cloudBackendConfig()
+	api, apiErr := newSupabaseAPI(cloudConfig)
+	if configErr != nil && mode == modeCloud {
+		apiErr = configErr
 	}
-	app.api = api
-	api.onTokens = app.writeSessionFile
+	if apiErr == nil {
+		api.onTokens = app.writeSessionFile
+		app.api = api
+	} else if mode == modeCloud {
+		app.setInitErr(apiErr)
+	}
+
+	if mode == modeLocal {
+		store, localErr := openLocalStore()
+		if localErr != nil {
+			app.setInitErr(localErr)
+		} else {
+			app.local = store
+		}
+	}
+
+	if modeErr != nil {
+		app.setInitErr(modeErr)
+	}
 
 	// Windows keeps the previous executable as a .old file because it cannot
 	// be deleted while it is running. Remove it after the next launch.
@@ -51,28 +77,33 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	if a.initErr != nil {
-		runtime.MessageDialog(ctx, runtime.MessageDialogOptions{
-			Type:    runtime.ErrorDialog,
-			Title:   "Stockbook",
-			Message: "Stockbook could not start its Supabase connection.\n\n" + a.initErr.Error(),
-		})
+	if a.currentInitErr() != nil {
+		// The sign-in screen shows the error and lets the user choose the
+		// other backend, so no blocking native dialog is needed.
 		return
 	}
 	a.restoreSession()
 }
 
 func (a *App) shutdown(context.Context) {
-	if a.api != nil {
-		a.api.client.CloseIdleConnections()
+	a.backendMu.Lock()
+	api := a.api
+	local := a.local
+	a.backendMu.Unlock()
+
+	if api != nil {
+		api.client.CloseIdleConnections()
+	}
+	if local != nil {
+		local.close()
 	}
 }
 
-// DataLocation is shown in the About area of the app and keeps the backend
-// location discoverable without exposing anything secret.
+// DataLocation is the folder that holds the local ledger, sessions, safety
+// copies, and any exported files. It is shown on the Export/import data page.
 func (a *App) DataLocation() string {
-	if a.api == nil {
+	if a.dataDir == "" {
 		return "Unavailable"
 	}
-	return a.api.baseURL
+	return a.dataDir
 }

@@ -4,7 +4,7 @@ import {main} from '../models';
 
 export function ApplyUpdate():Promise<main.UpdateApplyResult>;
 
-export function BackupDatabase():Promise<main.BackupResult>;
+export function BackendInfo():Promise<main.BackendInfo>;
 
 export function Categories():Promise<Array<string>>;
 
@@ -21,6 +21,10 @@ export function DataLocation():Promise<string>;
 export function DeletePurchase(arg1:main.IDInput):Promise<main.MutationResult>;
 
 export function DeleteSale(arg1:main.IDInput):Promise<main.MutationResult>;
+
+export function ExportData():Promise<main.ExportResult>;
+
+export function ImportData():Promise<main.ImportResult>;
 
 export function Inventory(arg1:main.InventoryInput):Promise<main.InventoryResult>;
 
@@ -40,11 +44,11 @@ export function Purchases(arg1:main.RangePageInput):Promise<main.PurchasesResult
 
 export function Register(arg1:main.RegisterInput):Promise<main.AuthResult>;
 
-export function RestoreDatabase():Promise<main.RestoreResult>;
-
 export function Sales(arg1:main.RangePageInput):Promise<main.SalesResult>;
 
 export function Session():Promise<main.SessionResult>;
+
+export function SetBackend(arg1:string):Promise<main.BackendInfo>;
 
 export function UpdateItem(arg1:main.ItemInput):Promise<main.MutationResult>;
 

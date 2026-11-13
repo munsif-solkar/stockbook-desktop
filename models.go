@@ -288,16 +288,16 @@ type rpcOutcome struct {
 	ProductName string `json:"productName"`
 }
 
-type BackupResult struct {
+type ExportResult struct {
 	Canceled bool   `json:"canceled,omitempty"`
 	Path     string `json:"path,omitempty"`
 	Size     int64  `json:"size,omitempty"`
 	Error    string `json:"error,omitempty"`
 }
 
-type RestoreResult struct {
+type ImportResult struct {
 	Canceled     bool   `json:"canceled,omitempty"`
-	Restored     bool   `json:"restored,omitempty"`
+	Imported     bool   `json:"imported,omitempty"`
 	SafetyBackup string `json:"safetyBackup,omitempty"`
 	Error        string `json:"error,omitempty"`
 }

@@ -22,7 +22,6 @@ data/
 *.db-wal
 session
 session.json
-config.json
 backups/
 
 # Editors and OS files
@@ -30,3 +29,6 @@ backups/
 .idea/
 .vscode/
 *.swp
+
+# Built binary
+/stockbook

@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-func (a *App) Session() SessionResult {
+func (a *App) cloudSession() SessionResult {
 	if a.initErr != nil {
 		return SessionResult{Error: a.initErr.Error()}
 	}
@@ -60,7 +60,7 @@ func friendlyAuthError(err error) string {
 	return "Could not reach the Stockbook backend. Check your connection and that Supabase is running."
 }
 
-func (a *App) Register(in RegisterInput) AuthResult {
+func (a *App) cloudRegister(in RegisterInput) AuthResult {
 	if a.initErr != nil {
 		return AuthResult{Error: a.initErr.Error()}
 	}
@@ -94,7 +94,7 @@ func (a *App) Register(in RegisterInput) AuthResult {
 	return AuthResult{Company: company}
 }
 
-func (a *App) Login(in LoginInput) AuthResult {
+func (a *App) cloudLogin(in LoginInput) AuthResult {
 	if a.initErr != nil {
 		return AuthResult{Error: a.initErr.Error()}
 	}
@@ -133,7 +133,7 @@ func (a *App) Login(in LoginInput) AuthResult {
 	return AuthResult{Company: company}
 }
 
-func (a *App) Logout() error {
+func (a *App) cloudLogout() error {
 	a.destroySession()
 	return nil
 }

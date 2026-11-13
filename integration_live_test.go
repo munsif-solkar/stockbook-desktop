@@ -13,9 +13,13 @@ func idString(id int64) string {
 
 // TestLiveSupabaseFlow exercises the real Supabase backend. It is skipped
 // unless STOCKBOOK_TEST_SUPABASE=1 is set, because it creates an auth user and
-// writes rows to the configured project.
+// writes rows to the configured project. It refuses to run without an explicit
+// test backend, so the hosted production project is never touched by accident.
 //
-//	STOCKBOOK_TEST_SUPABASE=1 STOCKBOOK_TEST_EMAIL=you+stockbook-test@gmail.com \
+//	STOCKBOOK_TEST_SUPABASE=1 \
+//	STOCKBOOK_TEST_SUPABASE_URL=https://YOUR-TEST-PROJECT.supabase.co \
+//	STOCKBOOK_TEST_SUPABASE_ANON_KEY=YOUR-TEST-ANON-KEY \
+//	STOCKBOOK_TEST_EMAIL=you+stockbook-test@gmail.com \
 //	  go test -run Live
 func TestLiveSupabaseFlow(t *testing.T) {
 	if os.Getenv("STOCKBOOK_TEST_SUPABASE") != "1" {
@@ -27,12 +31,26 @@ func TestLiveSupabaseFlow(t *testing.T) {
 		t.Fatal("set STOCKBOOK_TEST_EMAIL to an email address you control; the test registers this account")
 	}
 
+	baseURL := os.Getenv("STOCKBOOK_TEST_SUPABASE_URL")
+	anonKey := os.Getenv("STOCKBOOK_TEST_SUPABASE_ANON_KEY")
+	if baseURL == "" || anonKey == "" {
+		t.Fatal("set STOCKBOOK_TEST_SUPABASE_URL and STOCKBOOK_TEST_SUPABASE_ANON_KEY to a throwaway test project")
+	}
+	t.Setenv("STOCKBOOK_SUPABASE_URL", baseURL)
+	t.Setenv("STOCKBOOK_SUPABASE_ANON_KEY", anonKey)
+
 	dir := t.TempDir()
 	t.Setenv("STOCKBOOK_DATA_DIR", dir)
 
 	app := NewApp()
-	if app.initErr != nil {
-		t.Fatalf("start app: %v", app.initErr)
+	if err := app.currentInitErr(); err != nil {
+		t.Fatalf("start app: %v", err)
+	}
+
+	// A fresh data folder defaults to local mode. This test exercises the
+	// cloud backend, so select it explicitly.
+	if info := app.SetBackend("cloud"); info.Error != "" || !info.IsCloud {
+		t.Fatalf("select cloud backend: %+v", info)
 	}
 
 	registered := app.Register(RegisterInput{
@@ -139,10 +157,10 @@ func TestLiveSupabaseFlow(t *testing.T) {
 		t.Fatalf("stock not reduced: %+v %v", inventory, err)
 	}
 
-	backupPath := filepath.Join(dir, "backup.json")
-	backupSize, err := app.backupToFile(backupPath)
+	backupPath := filepath.Join(dir, "export.json")
+	backupSize, err := app.exportToFile(backupPath)
 	if err != nil || backupSize == 0 {
-		t.Fatalf("backup: %d %v", backupSize, err)
+		t.Fatalf("export: %d %v", backupSize, err)
 	}
 
 	if _, err := app.CreateItem(ItemInput{
@@ -155,16 +173,16 @@ func TestLiveSupabaseFlow(t *testing.T) {
 		t.Fatalf("create second item: %v", err)
 	}
 
-	safety, err := app.restoreFromFile(backupPath)
+	safety, err := app.importFromFile(backupPath)
 	if err != nil || safety == "" {
-		t.Fatalf("restore: %q %v", safety, err)
+		t.Fatalf("import: %q %v", safety, err)
 	}
-	if app.Session().Authenticated {
-		t.Fatal("restore should sign out")
+	if !app.Session().Authenticated {
+		t.Fatal("import should keep the session signed in")
 	}
 
-	// The session file must be gone after a restore.
-	if _, err := os.Stat(filepath.Join(dir, sessionFileName)); !os.IsNotExist(err) {
-		t.Fatalf("session file should be removed, got %v", err)
+	// The session file must still exist after an import.
+	if _, err := os.Stat(filepath.Join(dir, sessionFileName)); err != nil {
+		t.Fatalf("session file should remain after import, got %v", err)
 	}
 }

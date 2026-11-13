@@ -1,109 +1,105 @@
 # Migrating from Stockbook 1.x (SQLite)
 
-Stockbook 2.0 stores data in Supabase and does not read the old local
-`stockbook.db`. Existing ledgers are migrated once through a JSON backup:
+Stockbook 2.1 keeps the local-first path that 1.x used. The sign-in screen offers
+**On this computer** and **Stockbook Cloud**:
 
-1. convert the old SQLite file to a Stockbook JSON backup;
-2. restore that JSON into the new Supabase workspace.
+- **On this computer** opens the existing 1.x SQLite ledger directly. Accounts,
+  sessions, items, purchases, sales, and backups keep working in the same folder.
+- **Stockbook Cloud** is a hosted workspace for access from more than one
+  computer. Moving an old workspace there is a one-time export and import.
 
-The conversion is read-only. Keep the original database until you have verified
-the import.
+## Keep using the old database locally
 
-## Before you start
+1. Install and open Stockbook 2.1.
+2. Choose **On this computer**.
+3. Sign in with the email and password you used in 1.x.
 
-1. Close Stockbook 1.x so its write-ahead log is flushed.
-2. Copy the old data somewhere safe, including any sidecar files:
+That is the whole migration. Stockbook opens `stockbook.db` in the usual data
+folder, restores the existing 1.x `session` file when it is still valid, and
+continues writing startup snapshots to `backups/`. Nothing is deleted or
+converted.
 
-   ```
-   Linux:    ~/.local/share/Stockbook/stockbook.db
-             ~/.local/share/Stockbook/stockbook.db-wal
-             ~/.local/share/Stockbook/stockbook.db-shm
+Old data locations:
 
-   Windows:  %LOCALAPPDATA%\Stockbook\stockbook.db
-             %LOCALAPPDATA%\Stockbook\stockbook.db-wal
-             %LOCALAPPDATA%\Stockbook\stockbook.db-shm
-   ```
+```
+Linux:    ~/.local/share/Stockbook/stockbook.db
+          ~/.local/share/Stockbook/session
+          ~/.local/share/Stockbook/backups/
 
-3. Set up Supabase and configure the app as described in
-   [supabase-setup.md](supabase-setup.md).
+Windows:  %LOCALAPPDATA%\Stockbook\stockbook.db
+          %LOCALAPPDATA%\Stockbook\session
+          %LOCALAPPDATA%\Stockbook\backups/
+```
 
-## 1. Convert the database
+`STOCKBOOK_DATA_DIR` overrides the folder if you used a custom location, and
+`STOCKBOOK_DB` points at a specific database file.
 
-The converter uses only the Python standard library.
+A 1.x database can hold more than one company. Each account still signs in to
+its own workspace on the same computer; switch accounts by signing out and back
+in.
+
+## Move a local workspace to Stockbook Cloud
+
+Old passwords cannot move to the cloud because 1.x stored local scrypt hashes
+that Supabase Auth cannot import. Your inventory can move at any time.
+
+1. Open Stockbook in local mode and sign in to the workspace you want to move.
+2. On **Export/import data**, choose **Export to JSON…** and save the file
+   somewhere safe.
+3. On the sign-in screen, switch to **Stockbook Cloud**.
+4. Create a cloud account (or sign in to an existing one) and set its password.
+5. On **Export/import data**, choose **Import from JSON file…** and select the
+   file from step 2.
+6. Verify the items, stock, purchases, revenue, and profit.
+
+The JSON contains items, purchases, and sales only. It never contains the old
+account email, password hash, or session, which is why it can be imported into
+any account on either backend.
+
+If the old database held several companies, repeat the export for each local
+account and import each file into the matching cloud account. Each import
+replaces only the workspace you are signed in to.
+
+## What happens to the data
+
+- **Local mode** keeps `stockbook.db`, `session`, and `backups/` exactly where
+  1.x kept them.
+- **Cloud mode** stores business data in Supabase Postgres and keeps only
+  `session.json` on disk.
+- The two modes keep separate sessions. Switching back to **On this computer**
+  resumes the local account that was signed in before.
+- Exports and import safety copies are ordinary JSON files. Keep them until you
+  are satisfied with the new workspace.
+
+## Rollback
+
+Local mode is non-destructive, so the old database remains available as long as
+you do not delete it. If you move a workspace to the cloud and want to return,
+export from the cloud and import that file back into local mode; IDs are remapped
+during import, but items, quantities, dates, and amounts are preserved.
+
+Do not write to both a local ledger and a cloud workspace after moving and expect
+them to merge. Pick one as the source of truth and use JSON export/import to move
+between them.
+
+## Standalone JSON export
+
+The app handles normal 1.x data. If you need to inspect a database without
+opening Stockbook, or extract JSON on a machine where the old database cannot be
+opened, the optional Python utility still works. It uses only the standard
+library.
 
 ```bash
 # See which companies are in the file.
-python3 scripts/migrate-sqlite-to-json.py --list
+python3 supabase/migrate-sqlite-to-json.py --list \
+  --db "$HOME/.local/share/Stockbook/stockbook.db"
 
 # Export the only company, or choose one by id.
-python3 scripts/migrate-sqlite-to-json.py \
+python3 supabase/migrate-sqlite-to-json.py \
   --db "$HOME/.local/share/Stockbook/stockbook.db" \
   --company 1 \
   --out "$HOME/stockbook-backup.json"
 ```
 
-On Windows, use the `%LOCALAPPDATA%` path for `--db`. If the database has just
-one company, `--company` can be omitted.
-
-The output is the same format the app writes from **Backup & restore**.
-
-## 2. Import into Supabase
-
-1. Start Stockbook 2.0 and sign in to the workspace that should receive the
-   data.
-2. Open **Backup & restore**.
-3. Under **Restore**, choose the JSON file.
-4. Confirm. The app validates the file, writes a safety snapshot, replaces the
-   current workspace’s items, purchases, and sales, and signs you out.
-5. Sign in again and check **Items**, **Inventory**, **Purchases**, and
-   **Sales**.
-
-Restoring replaces the signed-in workspace’s ledger. If you have already added
-data to the Supabase workspace, export it first or use a fresh account.
-
-## 3. Verify
-
-Compare against the old app:
-
-- number of items and stock on hand;
-- purchase count and spend;
-- sales count, revenue, and profit;
-- low-stock items.
-
-The migration preserves amounts (integer paise/cents), quantities, timestamps,
-and notes. Product/purchase/sale IDs may differ in Supabase; relationships are
-remapped during import.
-
-## 4. Clear the old local data
-
-After verification, delete the old local files if you no longer need them:
-
-```
-stockbook.db
-stockbook.db-wal
-stockbook.db-shm
-session          (legacy 1.x session file)
-backups/         (old SQLite snapshots)
-```
-
-Keep `config.json`, the current Supabase `session.json`, and the JSON backup you
-imported. The JSON file is your rollback copy.
-
-## Multiple companies
-
-A 1.x database can hold more than one company. Export each one separately:
-
-```bash
-python3 scripts/migrate-sqlite-to-json.py --list
-python3 scripts/migrate-sqlite-to-json.py --company 1 --out company-1.json
-python3 scripts/migrate-sqlite-to-json.py --company 2 --out company-2.json
-```
-
-Sign in to the matching Supabase account for each workspace and restore the
-corresponding file.
-
-## Rollback
-
-The old app still runs if you keep its database and binary. Do not write to both
-the old SQLite file and the new Supabase workspace after migrating; choose one
-as the source of truth.
+The output is the same format **Export/import data** accepts. On Windows, use the
+`%LOCALAPPDATA%` path for `--db`.

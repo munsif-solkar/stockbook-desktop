@@ -10,6 +10,15 @@ export type SessionResult = {
   error?: string;
 };
 
+export type BackendInfo = {
+  mode: "local" | "cloud" | string;
+  label: string;
+  isLocal: boolean;
+  isCloud: boolean;
+  dataLocation?: string;
+  error?: string;
+};
+
 export type AuthResult = {
   company: Company | null;
   fieldErrors?: FieldErrors;
@@ -234,16 +243,16 @@ export type MutationResult = {
 
 export type ProductResult = { product: ProductOption | null };
 
-export type BackupResult = {
+export type ExportResult = {
   canceled?: boolean;
   path?: string;
   size?: number;
   error?: string;
 };
 
-export type RestoreResult = {
+export type ImportResult = {
   canceled?: boolean;
-  restored?: boolean;
+  imported?: boolean;
   safetyBackup?: string;
   error?: string;
 };
@@ -332,9 +341,12 @@ export const api = {
   DeleteSale: (id: number) =>
     invoke<MutationResult>("DeleteSale", { id: String(id) }),
   DataLocation: () => invoke<string>("DataLocation"),
+  BackendInfo: () => invoke<BackendInfo>("BackendInfo"),
+  SetBackend: (mode: "local" | "cloud") =>
+    invoke<BackendInfo>("SetBackend", mode),
   Version: () => invoke<string>("Version"),
-  BackupDatabase: () => invoke<BackupResult>("BackupDatabase"),
-  RestoreDatabase: () => invoke<RestoreResult>("RestoreDatabase"),
+  ExportData: () => invoke<ExportResult>("ExportData"),
+  ImportData: () => invoke<ImportResult>("ImportData"),
   CheckForUpdates: () => invoke<UpdateInfo>("CheckForUpdates"),
   ApplyUpdate: () => invoke<UpdateApplyResult>("ApplyUpdate"),
 };

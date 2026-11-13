@@ -3,6 +3,53 @@
 All notable changes to Stockbook Desktop are documented here. This project uses
 [Semantic Versioning](https://semver.org/).
 
+## [2.1.0] - 2026-11-14
+
+### Added
+
+- A storage choice on the sign-in screen: **On this computer** (local SQLite) or
+  **Stockbook Cloud** (hosted Supabase). Neither asks for a Supabase URL or key.
+- Local mode restores the Stockbook 1.x ledger: the same `stockbook.db`,
+  `session`, and `backups` folder, local accounts with scrypt password hashes,
+  and local session restore.
+- `backend.json` records only the selected mode. Existing Stockbook 2.0
+  installations with a `session.json` open in cloud mode; every other install
+  starts local-first.
+- Local and cloud sessions are remembered separately, so switching back resumes
+  the workspace that was already signed in.
+- A build-time `config.json` at the repository root, embedded into the binary
+  with `go:embed`, so the cloud choice connects to the hosted Supabase project
+  with no setup.
+
+### Changed
+
+- **Backup & restore** is now **Export/import data**, and it works with either
+  backend.
+- Exports contain inventory data only: items, purchases, and sales. The
+  workspace/account block, email address, and any password data are excluded.
+- Imports are fully validated before anything is touched: broken JSON, wrong
+  types, invalid ranges, duplicate IDs or SKUs, orphaned references, invalid
+  dates, and unknown payment modes are rejected. Local imports run in one
+  transaction and roll back on failure; cloud imports use the validated payload.
+- The same JSON file moves between local and cloud, and between accounts. A file
+  exported locally imports into any cloud account, even a different one.
+- Importing no longer signs the user out. The frontend reloads the workspace and
+  keeps the session.
+- End users no longer create or edit a data-directory `config.json`. Environment
+  overrides remain for development and tests.
+- The 1.x-to-JSON conversion prompt is gone because local mode opens the old
+  database directly. The standalone converter remains at
+  `supabase/migrate-sqlite-to-json.py` as an optional utility.
+- Rewrote the migration, self-hosting, and README documentation for the
+  local/cloud model.
+
+### Fixed
+
+- The live Supabase integration test now requires explicit test project
+  credentials, so it can no longer create users or write rows in the hosted
+  production project by accident.
+
+
 ## [2.0.0] - 2026-11-13
 
 ### Breaking

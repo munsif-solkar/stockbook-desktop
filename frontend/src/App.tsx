@@ -1,11 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { api, type Company } from "./api";
+import { BackendSwitch } from "./components/BackendSwitch";
 import { NewSellButton } from "./components/NewSellButton";
 import { SidebarNav } from "./components/SidebarNav";
 import { CURRENCY } from "./format";
 import { RefreshProvider, useRefresh } from "./refresh";
 import { Link, navigate, useRouter } from "./router";
-import { BackupPage } from "./pages/BackupPage";
+import { DataPage } from "./pages/DataPage";
 import { InventoryPage } from "./pages/InventoryPage";
 import { ItemsPage } from "./pages/ItemsPage";
 import { LoginPage } from "./pages/LoginPage";
@@ -55,7 +56,7 @@ function AppShell({
             {company.email}
           </span>
           <div className="sidebar-footer-actions">
-            <Link className="sidebar-footer-link" to="/backup?updates=1">
+            <Link className="sidebar-footer-link" to="/data?updates=1">
               Check for updates
             </Link>
             <button className="btn btn-ghost btn-sm" type="button" onClick={onLogout}>
@@ -161,8 +162,12 @@ export function App() {
           Stockbook
         </div>
         <div className="auth-card">
-          <h1 className="auth-title">Cannot reach the backend</h1>
+          <BackendSwitch />
+          <h1 className="auth-title">Stockbook could not open its workspace</h1>
           <p className="auth-sub">{bootError}</p>
+          <p className="hint">
+            Choose where your data should live above, then try again.
+          </p>
         </div>
       </main>
     );
@@ -198,8 +203,9 @@ export function App() {
     case "/sales":
       page = <SalesPage />;
       break;
+    case "/data":
     case "/backup":
-      page = <BackupPage />;
+      page = <DataPage />;
       break;
     case "/login":
     case "/register":
