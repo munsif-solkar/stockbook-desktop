@@ -21,6 +21,8 @@ data/
 *.db-shm
 *.db-wal
 session
+session.json
+config.json
 backups/
 
 # Editors and OS files

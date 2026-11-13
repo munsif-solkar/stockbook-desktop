@@ -21,7 +21,7 @@ export function LoginPage({
         <AuthForm mode="login" onAuthenticated={onAuthenticated} />
       </div>
       <p className="auth-note">
-        Your workspace data stays on this computer in a local SQLite database.
+        Your workspace is stored in Supabase and secured with your account.
       </p>
     </main>
   );

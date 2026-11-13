@@ -278,6 +278,16 @@ type MutationResult struct {
 	PurchaseID  int64               `json:"purchaseId,omitempty"`
 }
 
+// rpcOutcome is the shared shape returned by the stockbook_* write functions.
+type rpcOutcome struct {
+	OK          bool   `json:"ok"`
+	Error       string `json:"error"`
+	Field       string `json:"field"`
+	SaleID      int64  `json:"saleId"`
+	PurchaseID  int64  `json:"purchaseId"`
+	ProductName string `json:"productName"`
+}
+
 type BackupResult struct {
 	Canceled bool   `json:"canceled,omitempty"`
 	Path     string `json:"path,omitempty"`

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"os"
 	"sync"
 
@@ -10,32 +9,38 @@ import (
 )
 
 type App struct {
-	ctx    context.Context
-	db     *sql.DB
-	dbPath string
-	dbErr  error
+	ctx     context.Context
+	api     *supabaseAPI
+	dataDir string
+	initErr error
 
-	// opMu serialises maintenance operations that close or replace the
-	// database (backup, restore, update).
+	// opMu serialises maintenance operations that may replace a whole
+	// workspace (backup, restore, update).
 	opMu sync.Mutex
 
 	mu       sync.Mutex
 	company  *Company
-	token    string
 	attempts map[string]*attemptEntry
 }
 
 func NewApp() *App {
 	app := &App{attempts: map[string]*attemptEntry{}}
-	db, path, err := openDatabase()
-	app.db = db
-	app.dbPath = path
-	app.dbErr = err
-	if err == nil && path != "" {
-		// A leftover copy from an interrupted restore is no longer needed
-		// once the active database opens cleanly.
-		_ = os.Remove(path + ".replacing")
+
+	dir, err := dataDirectory()
+	if err != nil {
+		app.initErr = err
+		return app
 	}
+	app.dataDir = dir
+
+	api, err := newSupabaseAPI(readBackendConfig(dir))
+	if err != nil {
+		app.initErr = err
+		return app
+	}
+	app.api = api
+	api.onTokens = app.writeSessionFile
+
 	// Windows keeps the previous executable as a .old file because it cannot
 	// be deleted while it is running. Remove it after the next launch.
 	if executable, err := os.Executable(); err == nil {
@@ -46,11 +51,11 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	if a.dbErr != nil {
+	if a.initErr != nil {
 		runtime.MessageDialog(ctx, runtime.MessageDialogOptions{
 			Type:    runtime.ErrorDialog,
 			Title:   "Stockbook",
-			Message: "Stockbook could not open its local database.\n\n" + a.dbErr.Error(),
+			Message: "Stockbook could not start its Supabase connection.\n\n" + a.initErr.Error(),
 		})
 		return
 	}
@@ -58,16 +63,16 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) shutdown(context.Context) {
-	if a.db != nil {
-		_ = a.db.Close()
+	if a.api != nil {
+		a.api.client.CloseIdleConnections()
 	}
 }
 
-// DataLocation is shown in the About area of the app and keeps the local-first
-// storage location discoverable without exposing it in regular navigation.
+// DataLocation is shown in the About area of the app and keeps the backend
+// location discoverable without exposing anything secret.
 func (a *App) DataLocation() string {
-	if a.dbPath == "" {
+	if a.api == nil {
 		return "Unavailable"
 	}
-	return a.dbPath
+	return a.api.baseURL
 }

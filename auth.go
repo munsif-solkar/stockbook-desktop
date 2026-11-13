@@ -1,183 +1,113 @@
 package main
 
 import (
-	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
-	"database/sql"
-	"encoding/base64"
+	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
-	"sync"
 	"time"
-
-	"golang.org/x/crypto/scrypt"
 )
 
-const (
-	sessionDays = 7
-	scryptN     = 16384
-	scryptR     = 8
-	scryptP     = 1
-	scryptKey   = 64
-)
+const sessionFileName = "session.json"
 
-var (
-	errUnauthorized = errors.New("unauthorized")
-	dummyHashOnce   sync.Once
-	dummyHashValue  string
-)
-
-func randomToken(bytes int) (string, error) {
-	buffer := make([]byte, bytes)
-	if _, err := rand.Read(buffer); err != nil {
-		return "", err
+func (a *App) context() context.Context {
+	if a.ctx != nil {
+		return a.ctx
 	}
-	return base64.RawURLEncoding.EncodeToString(buffer), nil
-}
-
-func hashPassword(password string) (string, error) {
-	salt, err := randomToken(16)
-	if err != nil {
-		return "", err
-	}
-	derived, err := scrypt.Key([]byte(password), []byte(salt), scryptN, scryptR, scryptP, scryptKey)
-	if err != nil {
-		return "", err
-	}
-	return "scrypt$" + strconv.Itoa(scryptN) + "$" + strconv.Itoa(scryptR) + "$" + strconv.Itoa(scryptP) + "$" + salt + "$" + base64.RawURLEncoding.EncodeToString(derived), nil
-}
-
-func verifyPassword(password, stored string) bool {
-	parts := strings.Split(stored, "$")
-	if len(parts) != 6 || parts[0] != "scrypt" {
-		return false
-	}
-	n, errN := strconv.Atoi(parts[1])
-	r, errR := strconv.Atoi(parts[2])
-	p, errP := strconv.Atoi(parts[3])
-	if errN != nil || errR != nil || errP != nil || n <= 0 || r <= 0 || p <= 0 {
-		return false
-	}
-	expected, err := base64.RawURLEncoding.DecodeString(parts[5])
-	if err != nil || len(expected) == 0 {
-		return false
-	}
-	derived, err := scrypt.Key([]byte(password), []byte(parts[4]), n, r, p, len(expected))
-	if err != nil {
-		return false
-	}
-	return len(derived) == len(expected) && subtle.ConstantTimeCompare(derived, expected) == 1
-}
-
-func dummyHash() string {
-	dummyHashOnce.Do(func() {
-		dummyHashValue, _ = hashPassword("not-a-real-password-1")
-	})
-	return dummyHashValue
-}
-
-func hashToken(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return base64.RawURLEncoding.EncodeToString(sum[:])
+	return context.Background()
 }
 
 func (a *App) sessionFilePath() string {
-	return filepath.Join(filepath.Dir(a.dbPath), "session")
+	if a.dataDir == "" {
+		return ""
+	}
+	return filepath.Join(a.dataDir, sessionFileName)
 }
 
-func (a *App) createSession(companyID int64) error {
-	token, err := randomToken(32)
-	if err != nil {
-		return err
-	}
-	now := time.Now()
-	expiresAt := now.Add(sessionDays * 24 * time.Hour)
-	if _, err := a.db.Exec(
-		"INSERT INTO sessions (company_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?)",
-		companyID, hashToken(token), jsISO(expiresAt), jsISO(now),
-	); err != nil {
-		return err
-	}
+// writeSessionFile stores the Supabase tokens with owner-only permissions.
+// It is called whenever the client rotates its tokens.
+func (a *App) writeSessionFile(state tokenState) {
 	path := a.sessionFilePath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
+	if path == "" {
+		return
 	}
-	// Write through a temporary file so a crash can never leave a truncated
-	// session behind.
+	if state.AccessToken == "" {
+		_ = os.Remove(path)
+		return
+	}
+
+	data, err := json.Marshal(state)
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return
+	}
 	temp := path + ".tmp"
-	if err := os.WriteFile(temp, []byte(token), 0o600); err != nil {
-		return err
+	if err := os.WriteFile(temp, data, 0o600); err != nil {
+		return
 	}
 	if err := os.Rename(temp, path); err != nil {
 		_ = os.Remove(temp)
-		return err
+		return
 	}
 	_ = os.Chmod(path, 0o600)
-
-	a.mu.Lock()
-	a.token = token
-	a.mu.Unlock()
-	return nil
 }
 
-func (a *App) restoreSession() {
-	data, err := os.ReadFile(a.sessionFilePath())
+func (a *App) loadSessionFile() (tokenState, bool) {
+	path := a.sessionFilePath()
+	if path == "" {
+		return tokenState{}, false
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return
+		return tokenState{}, false
 	}
-	token := strings.TrimSpace(string(data))
-	if token == "" {
-		return
+	var state tokenState
+	if err := json.Unmarshal(data, &state); err != nil || state.RefreshToken == "" {
+		_ = os.Remove(path)
+		return tokenState{}, false
 	}
-	company, err := a.companyForToken(token)
-	if err != nil || company == nil {
-		_ = os.Remove(a.sessionFilePath())
-		return
-	}
-	a.mu.Lock()
-	a.token = token
-	a.company = company
-	a.mu.Unlock()
+	return state, true
 }
 
-func (a *App) destroySession() {
-	a.mu.Lock()
-	token := a.token
-	a.token = ""
-	a.company = nil
-	a.mu.Unlock()
+func (a *App) removeSessionFile() {
+	if path := a.sessionFilePath(); path != "" {
+		_ = os.Remove(path)
+	}
+}
 
-	if token != "" && a.db != nil {
-		if _, err := a.db.Exec("DELETE FROM sessions WHERE token_hash = ?", hashToken(token)); err != nil {
-			_ = err
+// restoreSession revalidates the saved Supabase session at startup. A stale or
+// revoked session simply lands on the sign-in screen; a backend that is down
+// does not lock the app behind a fatal error.
+func (a *App) restoreSession() {
+	state, ok := a.loadSessionFile()
+	if !ok {
+		return
+	}
+
+	a.api.restoreSession(state)
+	if time.Now().Add(60 * time.Second).After(state.ExpiresAt) {
+		if _, err := a.api.refreshNow(a.context()); err != nil {
+			if errors.Is(err, errUnauthorized) {
+				a.removeSessionFile()
+			}
+			return
 		}
 	}
-	if err := os.Remove(a.sessionFilePath()); err != nil && !errors.Is(err, os.ErrNotExist) {
-		_ = err
-	}
-}
 
-func (a *App) companyForToken(token string) (*Company, error) {
-	var company Company
-	err := a.db.QueryRow(
-		`SELECT c.id, c.name, c.email
-		 FROM sessions s
-		 JOIN companies c ON c.id = s.company_id
-		 WHERE s.token_hash = ? AND s.expires_at > ?
-		 LIMIT 1`,
-		hashToken(token), nowISO(),
-	).Scan(&company.ID, &company.Name, &company.Email)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
+	company, err := a.api.bootstrapCompany(a.context(), "")
 	if err != nil {
-		return nil, err
+		if errors.Is(err, errUnauthorized) {
+			a.api.clearSession()
+			a.removeSessionFile()
+		}
+		return
 	}
-	return &company, nil
+	a.mu.Lock()
+	a.company = company
+	a.mu.Unlock()
 }
 
 func (a *App) currentCompany() *Company {
@@ -196,6 +126,27 @@ func (a *App) requireCompany() (*Company, error) {
 		return nil, errUnauthorized
 	}
 	return company, nil
+}
+
+func (a *App) setCompany(company *Company) {
+	a.mu.Lock()
+	a.company = company
+	a.mu.Unlock()
+}
+
+// destroySession revokes the Supabase token when possible and always clears
+// the local session.
+func (a *App) destroySession() {
+	state := a.api.session()
+	a.api.clearSession()
+	a.setCompany(nil)
+
+	if state.AccessToken != "" {
+		ctx, cancel := context.WithTimeout(a.context(), 5*time.Second)
+		defer cancel()
+		a.api.authLogout(ctx, state.AccessToken)
+	}
+	a.removeSessionFile()
 }
 
 type attemptEntry struct {

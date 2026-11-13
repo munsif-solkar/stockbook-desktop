@@ -75,8 +75,8 @@ export function BackupPage() {
   async function handleRestore() {
     const confirmed = window.confirm(
       "Restore a Stockbook backup?\n\n" +
-        "This replaces every account, item, purchase, and sale in the local " +
-        "database with the contents of the backup file. A safety snapshot of " +
+        "This replaces every item, purchase, and sale in your Supabase " +
+        "workspace with the contents of the backup file. A safety snapshot of " +
         "the current data is kept and you will need to sign in again.",
     );
     if (!confirmed) return;
@@ -94,7 +94,7 @@ export function BackupPage() {
       if (result.restored) {
         setRestore(result);
         window.alert(
-          "Restore complete. Sign in with the account from the restored backup." +
+          "Restore complete. Sign in again to open your restored workspace." +
             (result.safetyBackup
               ? `\n\nA copy of your previous data was saved at:\n${result.safetyBackup}`
               : ""),
@@ -166,17 +166,16 @@ export function BackupPage() {
           <div className="section-head">
             <div>
               <h2 className="section-title">Backup</h2>
-              <p className="section-sub">Download a copy of the whole local database.</p>
+              <p className="section-sub">Download a copy of the whole workspace.</p>
             </div>
           </div>
           <div className="panel-body">
             <p className="backup-copy">
-              The backup is an ordinary SQLite <code>.db</code> file. It includes
-              every account, item, purchase, and sale stored by Stockbook on this
-              computer. Keep it on another drive or in cloud storage.
+              The backup is a JSON file containing every item, purchase, and sale
+              in this workspace. Keep it on another drive or in cloud storage.
             </p>
             <div className="backup-path">
-              <span>Live data file</span>
+              <span>Supabase backend</span>
               <code title={dataPath}>{dataPath || "Loading…"}</code>
             </div>
 
@@ -211,18 +210,19 @@ export function BackupPage() {
           <div className="section-head">
             <div>
               <h2 className="section-title">Restore</h2>
-              <p className="section-sub">Replace this computer's data from a backup.</p>
+              <p className="section-sub">Replace this workspace from a backup.</p>
             </div>
           </div>
           <div className="panel-body">
             <p className="backup-copy">
               Choose a backup created by Stockbook. The file is checked before
-              anything changes, and a safety snapshot of the current database is
-              kept in the <code>backups</code> folder beside your data.
+              anything changes, and a safety snapshot of the current workspace is
+              kept in the <code>backups</code> folder in your Stockbook data
+              directory.
             </p>
             <div className="backup-warning">
-              Restoring replaces the current accounts, items, purchases, and sales,
-              then signs you out. Other copies of Stockbook must be closed.
+              Restoring replaces the current items, purchases, and sales, then
+              signs you out. Your Supabase account is unchanged.
             </div>
 
             {restore?.safetyBackup ? (

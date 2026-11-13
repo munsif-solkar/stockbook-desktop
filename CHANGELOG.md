@@ -3,6 +3,36 @@
 All notable changes to Stockbook Desktop are documented here. This project uses
 [Semantic Versioning](https://semver.org/).
 
+## [2.0.0] - 2026-11-13
+
+### Breaking
+
+- Moved accounts and business data from the local SQLite database to Supabase
+  (Postgres, Auth, and row-level security). The same workspace can now be
+  opened from more than one computer.
+- Stockbook 2.0 does not read the 1.x `stockbook.db`. Existing ledgers must be
+  converted and restored once; see
+  [docs/migrating-from-1.x.md](docs/migrating-from-1.x.md) and
+  `scripts/migrate-sqlite-to-json.py`.
+- A Supabase project and a `config.json` (or environment variables) are now
+  required. See [docs/supabase-setup.md](docs/supabase-setup.md).
+
+### Changed
+
+- Desktop access goes through `stockbook_*` `security definer` functions scoped
+  to `auth.uid()`, with RLS enabled on all workspace tables.
+- Backup & restore now exports and imports a JSON workspace file instead of a
+  SQLite snapshot. Restore still validates the file and writes a safety
+  snapshot first.
+- Only the Supabase session file is kept on disk; there is no local database.
+- Added an optional `config.json` in the Stockbook data directory so a packaged
+  build can point at a hosted Supabase project without environment variables.
+- The workspace name from sign-up metadata is now used when the account is
+  confirmed and signs in for the first time.
+- Added an opt-in live Supabase integration test.
+- Added clear login feedback for unconfirmed email addresses, and renamed the
+  backend labels in the UI to Supabase.
+
 ## [1.1.0] - 2026-11-04
 
 ### Added

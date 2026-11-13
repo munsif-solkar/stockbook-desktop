@@ -1,81 +1,102 @@
 package main
 
 import (
-	"database/sql"
 	"errors"
 	"strings"
 )
 
-func (a *App) databaseError() error {
-	if a.db == nil {
-		if a.dbErr != nil {
-			return a.dbErr
-		}
-		return errors.New("database unavailable")
-	}
-	return nil
-}
-
 func (a *App) Session() SessionResult {
-	if err := a.databaseError(); err != nil {
-		return SessionResult{Error: "Could not open the local database."}
+	if a.initErr != nil {
+		return SessionResult{Error: a.initErr.Error()}
 	}
 	company := a.currentCompany()
 	return SessionResult{Authenticated: company != nil, Company: company}
 }
 
+func isAlreadyRegistered(err error) bool {
+	var apiErr *apiError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	text := strings.ToLower(apiErr.Code + " " + apiErr.Message)
+	return strings.Contains(text, "already registered") ||
+		strings.Contains(text, "already exists") ||
+		strings.Contains(text, "user_already_exists")
+}
+
+func isInvalidCredentials(err error) bool {
+	var apiErr *apiError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	text := strings.ToLower(apiErr.Code + " " + apiErr.Message)
+	return strings.Contains(text, "invalid login credentials") ||
+		strings.Contains(text, "invalid_credentials") ||
+		strings.Contains(text, "invalid grant")
+}
+
+func isEmailNotConfirmed(err error) bool {
+	var apiErr *apiError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	text := strings.ToLower(apiErr.Code + " " + apiErr.Message)
+	return strings.Contains(text, "email not confirmed") ||
+		strings.Contains(text, "email_not_confirmed")
+}
+
+func friendlyAuthError(err error) string {
+	var apiErr *apiError
+	if errors.As(err, &apiErr) {
+		switch {
+		case apiErr.Status == 429:
+			return "Too many attempts. Wait a few minutes and try again."
+		case apiErr.Status >= 500:
+			return "The Stockbook backend is unavailable. Please try again in a moment."
+		case apiErr.Message != "":
+			return apiErr.Message
+		}
+	}
+	return "Could not reach the Stockbook backend. Check your connection and that Supabase is running."
+}
+
 func (a *App) Register(in RegisterInput) AuthResult {
-	if err := a.databaseError(); err != nil {
-		return AuthResult{Error: "Could not open the local database."}
+	if a.initErr != nil {
+		return AuthResult{Error: a.initErr.Error()}
 	}
 
 	valid, fieldErrors := validateRegister(in)
 	if fieldErrors != nil {
-		return AuthResult{
-			FieldErrors: fieldErrors,
-			Company:     nil,
-		}
+		return AuthResult{FieldErrors: fieldErrors, Company: nil}
 	}
 
-	passwordHash, err := hashPassword(valid.Password)
+	state, err := a.api.authSignUp(a.context(), valid.Email, valid.Password, valid.CompanyName)
 	if err != nil {
-		return AuthResult{Error: "We could not create your account. Please try again."}
-	}
-
-	now := nowISO()
-	result, err := a.db.Exec(
-		"INSERT INTO companies (name, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
-		valid.CompanyName, valid.Email, passwordHash, now,
-	)
-	if err != nil {
-		if isUniqueConstraint(err) {
+		if isAlreadyRegistered(err) {
 			return AuthResult{FieldErrors: map[string][]string{
 				"email": {"An account with this email already exists."},
 			}}
 		}
-		return AuthResult{Error: "We could not create your account. Please try again."}
+		if errors.Is(err, errEmailConfirmation) {
+			return AuthResult{Error: "Check your email to confirm the account, then sign in."}
+		}
+		return AuthResult{Error: friendlyAuthError(err)}
 	}
 
-	companyID, err := result.LastInsertId()
+	a.api.setSession(state)
+
+	company, err := a.api.bootstrapCompany(a.context(), valid.CompanyName)
 	if err != nil {
-		return AuthResult{Error: "We could not create your account. Please try again."}
+		return AuthResult{Error: "Your account was created, but the workspace could not be loaded. Please sign in."}
 	}
 
-	if err := a.createSession(companyID); err != nil {
-		return AuthResult{Error: "We could not create your account. Please try again."}
-	}
-
-	company := &Company{ID: companyID, Name: valid.CompanyName, Email: valid.Email}
-	a.mu.Lock()
-	a.company = company
-	a.mu.Unlock()
-
+	a.setCompany(company)
 	return AuthResult{Company: company}
 }
 
 func (a *App) Login(in LoginInput) AuthResult {
-	if err := a.databaseError(); err != nil {
-		return AuthResult{Error: "Could not open the local database."}
+	if a.initErr != nil {
+		return AuthResult{Error: a.initErr.Error()}
 	}
 
 	valid, fieldErrors := validateLogin(in)
@@ -87,54 +108,32 @@ func (a *App) Login(in LoginInput) AuthResult {
 		return AuthResult{Error: "Too many sign-in attempts. Try again in a few minutes."}
 	}
 
-	var companyID int64
-	var storedHash string
-	err := a.db.QueryRow(
-		"SELECT id, password_hash FROM companies WHERE email = ?", valid.Email,
-	).Scan(&companyID, &storedHash)
-	if errors.Is(err, sql.ErrNoRows) {
-		verifyPassword(valid.Password, dummyHash())
-		a.recordLoginFailure(valid.Email)
-		return AuthResult{Error: "Incorrect email or password."}
-	}
+	state, err := a.api.authSignIn(a.context(), valid.Email, valid.Password)
 	if err != nil {
-		return AuthResult{Error: "Incorrect email or password."}
-	}
-
-	if !verifyPassword(valid.Password, storedHash) {
 		a.recordLoginFailure(valid.Email)
-		return AuthResult{Error: "Incorrect email or password."}
+		if isEmailNotConfirmed(err) {
+			return AuthResult{Error: "Confirm your email address before signing in. Check your inbox for the confirmation link."}
+		}
+		if isInvalidCredentials(err) {
+			return AuthResult{Error: "Incorrect email or password."}
+		}
+		return AuthResult{Error: friendlyAuthError(err)}
 	}
 
-	var company Company
-	if err := a.db.QueryRow(
-		"SELECT id, name, email FROM companies WHERE id = ?", companyID,
-	).Scan(&company.ID, &company.Name, &company.Email); err != nil {
-		return AuthResult{Error: "Incorrect email or password."}
-	}
+	a.api.setSession(state)
 
-	if err := a.createSession(company.ID); err != nil {
-		return AuthResult{Error: "We could not sign you in. Please try again."}
+	company, err := a.api.bootstrapCompany(a.context(), "")
+	if err != nil {
+		a.api.clearSession()
+		return AuthResult{Error: friendlyAuthError(err)}
 	}
 
 	a.clearLoginFailures(valid.Email)
-	a.mu.Lock()
-	a.company = &company
-	a.mu.Unlock()
-
-	return AuthResult{Company: &company}
+	a.setCompany(company)
+	return AuthResult{Company: company}
 }
 
 func (a *App) Logout() error {
 	a.destroySession()
 	return nil
-}
-
-func isUniqueConstraint(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "unique constraint failed") ||
-		strings.Contains(message, "constraint failed: unique")
 }

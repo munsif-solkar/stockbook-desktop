@@ -287,7 +287,7 @@ async function invoke<T>(method: string, ...args: unknown[]): Promise<T> {
   const api = bridge();
   if (!api || typeof api[method] !== "function") {
     throw new Error(
-      "Stockbook's desktop bridge is unavailable. Open the desktop app to reach your local data.",
+      "Stockbook's desktop bridge is unavailable. Open the desktop app to reach your data.",
     );
   }
   try {

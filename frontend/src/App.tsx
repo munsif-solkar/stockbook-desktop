@@ -161,7 +161,7 @@ export function App() {
           Stockbook
         </div>
         <div className="auth-card">
-          <h1 className="auth-title">Cannot open local data</h1>
+          <h1 className="auth-title">Cannot reach the backend</h1>
           <p className="auth-sub">{bootError}</p>
         </div>
       </main>

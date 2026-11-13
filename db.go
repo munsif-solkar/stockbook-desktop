@@ -1,311 +1,407 @@
 package main
 
 import (
-	"database/sql"
+	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
+	"sync"
 	"time"
-
-	_ "modernc.org/sqlite"
 )
 
-const schemaSQL = `
-CREATE TABLE IF NOT EXISTS companies (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  email TEXT NOT NULL COLLATE NOCASE UNIQUE,
-  password_hash TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
+const (
+	defaultSupabaseURL     = "http://127.0.0.1:54321"
+	defaultSupabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
+	apiTimeout             = 25 * time.Second
+	maxResponseBody        = 32 << 20
+	configFileName         = "config.json"
+)
 
-CREATE TABLE IF NOT EXISTS sessions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-  token_hash TEXT NOT NULL UNIQUE,
-  expires_at TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS sessions_company_idx ON sessions(company_id);
-CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires_at);
+// backendConfig is an optional config.json in the Stockbook data directory.
+// It lets a packaged desktop build point at a hosted Supabase project without
+// environment variables. The anon key is public by design; never put the
+// service-role key here.
+type backendConfig struct {
+	SupabaseURL     string `json:"supabaseUrl"`
+	SupabaseAnonKey string `json:"supabaseAnonKey"`
+}
 
-CREATE TABLE IF NOT EXISTS products (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  sku TEXT,
-  category TEXT NOT NULL,
-  purchase_price INTEGER NOT NULL CHECK (purchase_price >= 0),
-  sell_price INTEGER NOT NULL CHECK (sell_price >= 0),
-  quantity INTEGER NOT NULL DEFAULT 0 CHECK (quantity >= 0),
-  low_stock_threshold INTEGER NOT NULL DEFAULT 5 CHECK (low_stock_threshold >= 0),
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-CREATE UNIQUE INDEX IF NOT EXISTS products_company_sku_idx
-  ON products(company_id, sku) WHERE sku IS NOT NULL AND sku <> '';
-CREATE INDEX IF NOT EXISTS products_company_name_idx ON products(company_id, name);
-CREATE INDEX IF NOT EXISTS products_company_category_idx ON products(company_id, category);
+func readBackendConfig(dir string) backendConfig {
+	if dir == "" {
+		return backendConfig{}
+	}
+	data, err := os.ReadFile(filepath.Join(dir, configFileName))
+	if err != nil {
+		return backendConfig{}
+	}
+	var config backendConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		return backendConfig{}
+	}
+	return config
+}
 
-CREATE TABLE IF NOT EXISTS purchases (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-  product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
-  quantity INTEGER NOT NULL CHECK (quantity > 0),
-  unit_cost INTEGER NOT NULL CHECK (unit_cost >= 0),
-  total_cost INTEGER NOT NULL CHECK (total_cost >= 0),
-  purchased_at TEXT NOT NULL,
-  note TEXT,
-  created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS purchases_company_date_idx
-  ON purchases(company_id, purchased_at);
-CREATE INDEX IF NOT EXISTS purchases_company_product_idx
-  ON purchases(company_id, product_id);
+var (
+	errUnauthorized      = errors.New("unauthorized")
+	errEmailConfirmation = errors.New("email confirmation required")
+)
 
-CREATE TABLE IF NOT EXISTS sales (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-  product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
-  quantity INTEGER NOT NULL CHECK (quantity > 0),
-  unit_price INTEGER NOT NULL CHECK (unit_price >= 0),
-  total_price INTEGER NOT NULL CHECK (total_price >= 0),
-  unit_cost INTEGER NOT NULL CHECK (unit_cost >= 0),
-  total_cost INTEGER NOT NULL CHECK (total_cost >= 0),
-  profit INTEGER NOT NULL,
-  payment_mode TEXT NOT NULL DEFAULT 'cash' CHECK (payment_mode IN ('cash', 'upi')),
-  sold_at TEXT NOT NULL,
-  note TEXT,
-  created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS sales_company_date_idx ON sales(company_id, sold_at);
-CREATE INDEX IF NOT EXISTS sales_company_product_idx ON sales(company_id, product_id);
-`
+// tokenState is the Supabase session kept on disk between launches.
+type tokenState struct {
+	AccessToken  string    `json:"access_token"`
+	RefreshToken string    `json:"refresh_token"`
+	ExpiresAt    time.Time `json:"expires_at"`
+}
 
+type authSession struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int64  `json:"expires_in"`
+	User         struct {
+		ID    string `json:"id"`
+		Email string `json:"email"`
+	} `json:"user"`
+}
+
+func (s authSession) tokens() tokenState {
+	return tokenState{
+		AccessToken:  s.AccessToken,
+		RefreshToken: s.RefreshToken,
+		ExpiresAt:    time.Now().Add(time.Duration(s.ExpiresIn) * time.Second),
+	}
+}
+
+type apiError struct {
+	Status  int
+	Code    string
+	Message string
+}
+
+func (e *apiError) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	return fmt.Sprintf("request failed with status %d", e.Status)
+}
+
+func parseAPIError(status int, body []byte) error {
+	var payload struct {
+		Message          string `json:"message"`
+		Msg              string `json:"msg"`
+		ErrorDescription string `json:"error_description"`
+		Error            string `json:"error"`
+		ErrorCode        string `json:"error_code"`
+	}
+	_ = json.Unmarshal(body, &payload)
+
+	message := payload.Msg
+	if message == "" {
+		message = payload.Message
+	}
+	if message == "" {
+		message = payload.ErrorDescription
+	}
+	if message == "" {
+		message = payload.Error
+	}
+	code := payload.ErrorCode
+	if code == "" {
+		code = payload.Error
+	}
+	if message == "" {
+		message = strings.TrimSpace(string(body))
+	}
+	return &apiError{Status: status, Code: code, Message: message}
+}
+
+// supabaseAPI talks to Supabase Auth and PostgREST. Business data only moves
+// through the stockbook_* RPCs, so the app never trusts client-side table
+// writes for stock or money.
+type supabaseAPI struct {
+	baseURL string
+	anonKey string
+	client  *http.Client
+
+	mu           sync.Mutex
+	accessToken  string
+	refreshToken string
+	expiresAt    time.Time
+	onTokens     func(tokenState)
+}
+
+func newSupabaseAPI(config backendConfig) (*supabaseAPI, error) {
+	baseURL := strings.TrimSpace(os.Getenv("STOCKBOOK_SUPABASE_URL"))
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(config.SupabaseURL)
+	}
+	if baseURL == "" {
+		baseURL = defaultSupabaseURL
+	}
+	baseURL = strings.TrimRight(baseURL, "/")
+
+	anonKey := strings.TrimSpace(os.Getenv("STOCKBOOK_SUPABASE_ANON_KEY"))
+	if anonKey == "" {
+		anonKey = strings.TrimSpace(config.SupabaseAnonKey)
+	}
+	if anonKey == "" {
+		anonKey = defaultSupabaseAnonKey
+	}
+
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return nil, fmt.Errorf("STOCKBOOK_SUPABASE_URL is not a valid http(s) URL")
+	}
+	if anonKey == "" {
+		return nil, fmt.Errorf("STOCKBOOK_SUPABASE_ANON_KEY is empty")
+	}
+
+	return &supabaseAPI{
+		baseURL: baseURL,
+		anonKey: anonKey,
+		client:  &http.Client{Timeout: apiTimeout},
+	}, nil
+}
+
+func (s *supabaseAPI) request(ctx context.Context, method, path string, body any, token string) (int, []byte, error) {
+	var reader io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return 0, nil, err
+		}
+		reader = bytes.NewReader(encoded)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, s.baseURL+path, reader)
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("apikey", s.anonKey)
+	req.Header.Set("Accept", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+	if err != nil {
+		return 0, nil, err
+	}
+	return resp.StatusCode, data, nil
+}
+
+func (s *supabaseAPI) session() tokenState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return tokenState{
+		AccessToken:  s.accessToken,
+		RefreshToken: s.refreshToken,
+		ExpiresAt:    s.expiresAt,
+	}
+}
+
+func (s *supabaseAPI) setSession(state tokenState) {
+	s.mu.Lock()
+	s.accessToken = state.AccessToken
+	s.refreshToken = state.RefreshToken
+	s.expiresAt = state.ExpiresAt
+	callback := s.onTokens
+	s.mu.Unlock()
+
+	if callback != nil {
+		callback(state)
+	}
+}
+
+func (s *supabaseAPI) restoreSession(state tokenState) {
+	s.mu.Lock()
+	s.accessToken = state.AccessToken
+	s.refreshToken = state.RefreshToken
+	s.expiresAt = state.ExpiresAt
+	s.mu.Unlock()
+}
+
+func (s *supabaseAPI) clearSession() {
+	s.setSession(tokenState{})
+}
+
+func (s *supabaseAPI) ensureToken(ctx context.Context) (string, error) {
+	s.mu.Lock()
+	token := s.accessToken
+	expiresAt := s.expiresAt
+	s.mu.Unlock()
+
+	if token == "" {
+		return "", errUnauthorized
+	}
+	if expiresAt.IsZero() || time.Now().Add(60*time.Second).Before(expiresAt) {
+		return token, nil
+	}
+	return s.refreshNow(ctx)
+}
+
+func (s *supabaseAPI) refreshNow(ctx context.Context) (string, error) {
+	refresh := s.session().RefreshToken
+	if refresh == "" {
+		s.clearSession()
+		return "", errUnauthorized
+	}
+
+	status, body, err := s.request(ctx, http.MethodPost,
+		"/auth/v1/token?grant_type=refresh_token",
+		map[string]any{"refresh_token": refresh}, "")
+	if err != nil {
+		return "", err
+	}
+	if status < 200 || status >= 300 {
+		apiErr := parseAPIError(status, body)
+		if status == 400 || status == 401 {
+			s.clearSession()
+			return "", errUnauthorized
+		}
+		return "", apiErr
+	}
+
+	var session authSession
+	if err := json.Unmarshal(body, &session); err != nil {
+		return "", err
+	}
+	if session.AccessToken == "" {
+		s.clearSession()
+		return "", errUnauthorized
+	}
+	s.setSession(session.tokens())
+	return session.AccessToken, nil
+}
+
+// rpc calls a PostgREST function and decodes its JSON result.
+func (s *supabaseAPI) rpc(ctx context.Context, function string, args any, out any) error {
+	if args == nil {
+		args = map[string]any{}
+	}
+	token, err := s.ensureToken(ctx)
+	if err != nil {
+		return err
+	}
+
+	status, body, err := s.request(ctx, http.MethodPost, "/rest/v1/rpc/"+function, args, token)
+	if err != nil {
+		return err
+	}
+	if status == 401 {
+		token, err = s.refreshNow(ctx)
+		if err != nil {
+			return err
+		}
+		status, body, err = s.request(ctx, http.MethodPost, "/rest/v1/rpc/"+function, args, token)
+		if err != nil {
+			return err
+		}
+	}
+	if status == 401 || status == 403 {
+		s.clearSession()
+		return errUnauthorized
+	}
+	if status < 200 || status >= 300 {
+		return parseAPIError(status, body)
+	}
+
+	if out != nil && len(bytes.TrimSpace(body)) > 0 {
+		if err := json.Unmarshal(body, out); err != nil {
+			return fmt.Errorf("decode %s response: %w", function, err)
+		}
+	}
+	return nil
+}
+
+func (s *supabaseAPI) authSignUp(ctx context.Context, email, password, companyName string) (tokenState, error) {
+	payload := map[string]any{
+		"email":    email,
+		"password": password,
+		"data":     map[string]any{"company_name": companyName},
+	}
+	status, body, err := s.request(ctx, http.MethodPost, "/auth/v1/signup", payload, "")
+	if err != nil {
+		return tokenState{}, err
+	}
+	if status < 200 || status >= 300 {
+		return tokenState{}, parseAPIError(status, body)
+	}
+
+	var session authSession
+	if err := json.Unmarshal(body, &session); err != nil {
+		return tokenState{}, err
+	}
+	if session.AccessToken == "" || session.RefreshToken == "" {
+		return tokenState{}, errEmailConfirmation
+	}
+	return session.tokens(), nil
+}
+
+func (s *supabaseAPI) authSignIn(ctx context.Context, email, password string) (tokenState, error) {
+	status, body, err := s.request(ctx, http.MethodPost,
+		"/auth/v1/token?grant_type=password",
+		map[string]any{"email": email, "password": password}, "")
+	if err != nil {
+		return tokenState{}, err
+	}
+	if status < 200 || status >= 300 {
+		return tokenState{}, parseAPIError(status, body)
+	}
+
+	var session authSession
+	if err := json.Unmarshal(body, &session); err != nil {
+		return tokenState{}, err
+	}
+	if session.AccessToken == "" || session.RefreshToken == "" {
+		return tokenState{}, errUnauthorized
+	}
+	return session.tokens(), nil
+}
+
+func (s *supabaseAPI) authLogout(ctx context.Context, token string) {
+	if token == "" {
+		return
+	}
+	_, _, _ = s.request(ctx, http.MethodPost, "/auth/v1/logout", nil, token)
+}
+
+func (s *supabaseAPI) bootstrapCompany(ctx context.Context, name string) (*Company, error) {
+	args := map[string]any{"p_name": nil}
+	if trimmed := strings.TrimSpace(name); trimmed != "" {
+		args["p_name"] = trimmed
+	}
+
+	var company Company
+	if err := s.rpc(ctx, "stockbook_bootstrap_company", args, &company); err != nil {
+		return nil, err
+	}
+	if company.ID == 0 {
+		return nil, errors.New("could not load the workspace")
+	}
+	return &company, nil
+}
+
+// dataDirectory is where the app keeps its session file. Business data now
+// lives in Supabase; this folder no longer holds a database.
 func dataDirectory() (string, error) {
 	if configured := os.Getenv("STOCKBOOK_DATA_DIR"); configured != "" {
 		return filepath.Abs(configured)
 	}
 	return defaultDataDirectory()
-}
-
-func databasePath() (string, error) {
-	if configured := os.Getenv("STOCKBOOK_DB"); configured != "" {
-		return filepath.Abs(configured)
-	}
-	dir, err := dataDirectory()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "stockbook.db"), nil
-}
-
-// copyFile copies src to dst with owner-only permissions.
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
-}
-
-// importLegacyDatabase copies a stockbook.db that lives beside the old web app
-// into the desktop data directory the first time the desktop app starts.
-func importLegacyDatabase(target string) {
-	if _, err := os.Stat(target); err == nil {
-		return
-	}
-	cwd, _ := os.Getwd()
-	exe, _ := os.Executable()
-	exeDir := filepath.Dir(exe)
-	candidates := []string{
-		filepath.Join(cwd, "data", "stockbook.db"),
-		filepath.Join(exeDir, "data", "stockbook.db"),
-		filepath.Join(exeDir, "..", "data", "stockbook.db"),
-	}
-	for _, candidate := range candidates {
-		if _, err := os.Stat(candidate); err != nil {
-			continue
-		}
-		if err := copyFile(candidate, target); err != nil {
-			return
-		}
-		// Keep the write-ahead log so the most recent committed data survives.
-		for _, suffix := range []string{"-wal", "-shm"} {
-			if _, err := os.Stat(candidate + suffix); err == nil {
-				_ = copyFile(candidate+suffix, target+suffix)
-			}
-		}
-		return
-	}
-}
-
-const backupRetention = 10
-
-func backupDirectory(dbPath string) string {
-	return filepath.Join(filepath.Dir(dbPath), "backups")
-}
-
-// backupDatabase writes a consistent copy of the database next to it. Startup
-// snapshots mean a bad upgrade, a mistaken deletion, or a corrupted file never
-// takes the only copy with it. Any failure is non-fatal: opening the ledger is
-// more important than making a backup.
-func backupDatabase(db *sql.DB, dbPath string) {
-	var companies int
-	if err := db.QueryRow("SELECT COUNT(*) FROM companies").Scan(&companies); err != nil || companies == 0 {
-		return
-	}
-
-	dir := backupDirectory(dbPath)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return
-	}
-
-	name := "stockbook-" + time.Now().Format("20060102-150405.000") + ".db"
-	target := filepath.Join(dir, name)
-	if _, err := db.Exec("VACUUM INTO ?", target); err != nil {
-		return
-	}
-	_ = os.Chmod(target, 0o600)
-	pruneBackups(dir)
-}
-
-func pruneBackups(dir string) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-
-	names := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasPrefix(name, "stockbook-") || !strings.HasSuffix(name, ".db") {
-			continue
-		}
-		names = append(names, name)
-	}
-
-	// Timestamped names sort oldest first.
-	sort.Strings(names)
-	for len(names) > backupRetention {
-		_ = os.Remove(filepath.Join(dir, names[0]))
-		names = names[1:]
-	}
-}
-
-func openDatabase() (*sql.DB, string, error) {
-	path, err := databasePath()
-	if err != nil {
-		return nil, "", err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, "", err
-	}
-
-	// If a restore was interrupted between moving the old database aside and
-	// installing the new one, put the old database back before opening.
-	if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
-		if _, oldErr := os.Stat(path + ".replacing"); oldErr == nil {
-			_ = os.Rename(path+".replacing", path)
-		}
-	}
-
-	importLegacyDatabase(path)
-
-	// Pass the native file name straight to the driver. Building a file: URI
-	// here used to produce file://C:%5C... on Windows, which SQLite treated as
-	// an empty path (reported as the misleading "out of memory" CANTOPEN
-	// error). A plain path is accepted on every platform.
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		return nil, "", err
-	}
-	// A single connection keeps writes serialised and PRAGMAs consistent.
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-
-	pragmas := []string{
-		"PRAGMA journal_mode = WAL",
-		"PRAGMA foreign_keys = ON",
-		"PRAGMA busy_timeout = 5000",
-		// FULL fsyncs every commit, so a power cut cannot lose an
-		// acknowledged purchase or sale. The write volume here is tiny.
-		"PRAGMA synchronous = FULL",
-	}
-	for _, pragma := range pragmas {
-		if _, err := db.Exec(pragma); err != nil {
-			db.Close()
-			return nil, "", fmt.Errorf("configure database %s: %w", path, err)
-		}
-	}
-
-	if _, err := db.Exec(schemaSQL); err != nil {
-		db.Close()
-		return nil, "", fmt.Errorf("create schema: %w", err)
-	}
-
-	// Snapshot on startup before any migration runs. Backups live beside the
-	// database, so they survive replacing the executable or installing a new
-	// build. Failures never stop the app from opening.
-	backupDatabase(db, path)
-
-	needsPaymentMode, err := columnMissing(db, "sales", "payment_mode")
-	if err != nil {
-		db.Close()
-		return nil, "", err
-	}
-	if needsPaymentMode {
-		if _, err := db.Exec(`ALTER TABLE sales ADD COLUMN payment_mode TEXT NOT NULL DEFAULT 'cash' CHECK (payment_mode IN ('cash', 'upi'))`); err != nil {
-			db.Close()
-			return nil, "", fmt.Errorf("add payment mode: %w", err)
-		}
-	}
-
-	if _, err := db.Exec("DELETE FROM sessions WHERE expires_at <= ?", jsISO(time.Now())); err != nil {
-		db.Close()
-		return nil, "", err
-	}
-
-	if err := os.Chmod(path, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
-		// Some filesystems do not support chmod; the app still runs.
-		_ = err
-	}
-	return db, path, nil
-}
-
-func columnMissing(db *sql.DB, table, column string) (bool, error) {
-	rows, err := db.Query("PRAGMA table_info(" + table + ")")
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-
-	found := false
-	for rows.Next() {
-		var cid int64
-		var name, dataType string
-		var notNull, pk int64
-		var defaultValue sql.NullString
-		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &pk); err != nil {
-			return false, err
-		}
-		if name == column {
-			found = true
-		}
-	}
-	return !found, rows.Err()
 }

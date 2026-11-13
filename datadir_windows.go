@@ -7,8 +7,9 @@ import (
 	"path/filepath"
 )
 
-// defaultDataDirectory keeps the database inside the user's local app data
-// folder on Windows instead of a Unix-style ~/.local/share path.
+// defaultDataDirectory keeps the session file and safety snapshots inside the
+// user's local app data folder on Windows instead of a Unix-style
+// ~/.local/share path.
 func defaultDataDirectory() (string, error) {
 	if local := os.Getenv("LOCALAPPDATA"); local != "" {
 		return filepath.Join(local, "Stockbook"), nil
